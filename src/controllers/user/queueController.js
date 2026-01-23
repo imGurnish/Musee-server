@@ -49,7 +49,9 @@ async function getQueue(req, res) {
   if (!userId) throw createError(401, 'Unauthorized');
   const client = await getRedisClient();
   // Always ensure the queue has at least 10 items while user is listening
-  const ids = await ensureMinQueue(userId, 10);
+  // const ids = await ensureMinQueue(userId, 10);
+  // DISABLED: Rely on frontend smart fill
+  const ids = await client.lRange(queueKey(userId), 0, -1);
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.json({ items: ids, total: ids.length });
 
@@ -193,27 +195,19 @@ async function playTrack(req, res) {
     await client.set(metaKey(startId), JSON.stringify(metadata), { EX: 86400 * 7 });
   }
 
-  // fetch next 10 published tracks (simple random offset approach)
-  const LIMIT = 10;
-  // first get total
-  const { total } = await listTracksUser({ limit: 1, offset: 0 });
-  const maxOffset = Math.max(0, (total || 0) - LIMIT);
-  const offset = maxOffset > 0 ? Math.floor(Math.random() * (maxOffset + 1)) : 0;
-  const { items } = await listTracksUser({ limit: LIMIT + 5, offset }); // fetch a few extra
-  const next = [];
-  for (const t of items) {
-    if (next.length >= LIMIT) break;
-    if (t.track_id !== startId) next.push(t.track_id);
-  }
-
-  const fullQueue = [startId, ...next.slice(0, LIMIT)];
+  // Only init queue with the requested track.
+  // Allow Client to populate the rest via Smart Recommendations.
+  const fullQueue = [startId];
 
   const key = queueKey(userId);
   await client.del(key);
   await client.rPush(key, fullQueue);
 
   // Ensure minimum size in case we couldn't gather 10 unique
-  const ensured = await ensureMinQueue(userId, 10);
+  // const ensured = await ensureMinQueue(userId, 10);
+  // DISABLED: Rely on frontend smart fill
+  const ensured = await client.lRange(key, 0, -1);
+
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.status(201).json({ items: ensured, total: ensured.length });
 
