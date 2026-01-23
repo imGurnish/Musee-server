@@ -4,6 +4,7 @@ const { listTracksUser, listTracksByIdsUser } = require('../../models/trackModel
 const { isUUID } = require('../../utils/validators');
 
 function queueKey(userId) { return `user:queue:${userId}`; }
+function metaKey(trackId) { return `track:meta:${trackId}`; }
 
 async function ensureMinQueue(userId, minSize = 10) {
   const client = await getRedisClient();
@@ -52,32 +53,86 @@ async function getQueue(req, res) {
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.json({ items: ids, total: ids.length });
 
-  const found = await listTracksByIdsUser(ids);
-  const foundMap = new Map(found.map(i => [i.track_id, i]));
+  const separated = ids.reduce((acc, id) => {
+    if (isUUID(id)) acc.db.push(id);
+    else acc.ext.push(id);
+    return acc;
+  }, { db: [], ext: [] });
 
-  const items = ids.map(id => foundMap.get(id) || {
-    track_id: id,
-    title: 'External Track',
-    artists: [],
-    album: {},
-    duration: 0
+  // Fetch DB tracks
+  let dbTracks = [];
+  if (separated.db.length > 0) {
+    dbTracks = await listTracksByIdsUser(separated.db);
+  }
+  const dbMap = new Map(dbTracks.map(t => [t.track_id, t]));
+
+  // Fetch External Metadata
+  const extMap = new Map();
+  if (separated.ext.length > 0) {
+    const keys = separated.ext.map(id => metaKey(id));
+    const metas = await client.mGet(keys);
+    separated.ext.forEach((id, idx) => {
+      const json = metas[idx];
+      if (json) {
+        try {
+          extMap.set(id, JSON.parse(json));
+        } catch (e) { }
+      }
+    });
+  }
+
+  // Merge back in order
+  const items = ids.map(id => {
+    if (dbMap.has(id)) return dbMap.get(id);
+    if (extMap.has(id)) return { ...extMap.get(id), track_id: id };
+    // Fallback
+    return {
+      track_id: id,
+      title: 'External Track',
+      artists: [],
+      album: {},
+      duration: 0
+    };
   });
 
   return res.json({ items, total: ids.length });
 }
 
-// POST /api/user/queue/add  { track_id } | { track_ids: [] }
+// POST /api/user/queue/add  { track_id, metadata? } | { track_ids: [], metadata: []? }
 async function addToQueue(req, res) {
   const userId = req.user?.id;
   if (!userId) throw createError(401, 'Unauthorized');
   const client = await getRedisClient();
+
   let ids = [];
-  if (req.body?.track_id) ids = [String(req.body.track_id)];
-  if (Array.isArray(req.body?.track_ids)) ids = req.body.track_ids.map(String);
+  let metas = [];
+
+  if (req.body?.track_id) {
+    ids = [String(req.body.track_id)];
+    if (req.body.metadata) metas = [req.body.metadata];
+  }
+  if (Array.isArray(req.body?.track_ids)) {
+    ids = req.body.track_ids.map(String);
+    if (Array.isArray(req.body?.metadata_list)) metas = req.body.metadata_list;
+  }
+
   if (!ids.length) throw createError(400, 'track_id or track_ids required');
+
+  // Store metadata for external tracks
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!isUUID(id) && i < metas.length && metas[i]) {
+      await client.set(metaKey(id), JSON.stringify(metas[i]), { EX: 86400 * 7 }); // 7 days expiry
+    } else if (!isUUID(id) && req.body.metadata && ids.length === 1) {
+      // Single add with metadata
+      await client.set(metaKey(id), JSON.stringify(req.body.metadata), { EX: 86400 * 7 });
+    }
+  }
+
   // Append to the end
   if (ids.length === 1) await client.rPush(queueKey(userId), ids[0]);
   else await client.rPush(queueKey(userId), ids);
+
   const newLen = await client.lLen(queueKey(userId));
   res.status(201).json({ ok: true, total: newLen });
 }
@@ -122,14 +177,21 @@ async function clearQueue(req, res) {
   res.json({ ok: true });
 }
 
-// POST /api/user/queue/play { track_id }
+// POST /api/user/queue/play { track_id, metadata? }
 // Resets the queue to [track_id, ...10 next tracks]
 async function playTrack(req, res) {
   const userId = req.user?.id;
   if (!userId) throw createError(401, 'Unauthorized');
-  const { track_id } = req.body || {};
+  const { track_id, metadata } = req.body || {};
   if (!track_id) throw createError(400, 'track_id is required');
   const startId = String(track_id);
+
+  const client = await getRedisClient();
+
+  // Store metadata if external
+  if (!isUUID(startId) && metadata) {
+    await client.set(metaKey(startId), JSON.stringify(metadata), { EX: 86400 * 7 });
+  }
 
   // fetch next 10 published tracks (simple random offset approach)
   const LIMIT = 10;
@@ -146,7 +208,6 @@ async function playTrack(req, res) {
 
   const fullQueue = [startId, ...next.slice(0, LIMIT)];
 
-  const client = await getRedisClient();
   const key = queueKey(userId);
   await client.del(key);
   await client.rPush(key, fullQueue);
@@ -156,15 +217,43 @@ async function playTrack(req, res) {
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.status(201).json({ items: ensured, total: ensured.length });
 
-  const found = await listTracksByIdsUser(ensured);
-  const foundMap = new Map(found.map(i => [i.track_id, i]));
+  // Expand
+  const separated = ensured.reduce((acc, id) => {
+    if (isUUID(id)) acc.db.push(id);
+    else acc.ext.push(id);
+    return acc;
+  }, { db: [], ext: [] });
 
-  const expanded = ensured.map(id => foundMap.get(id) || {
-    track_id: id,
-    title: 'External Track',
-    artists: [],
-    album: {},
-    duration: 0
+  let dbTracks = [];
+  if (separated.db.length > 0) {
+    dbTracks = await listTracksByIdsUser(separated.db);
+  }
+  const dbMap = new Map(dbTracks.map(t => [t.track_id, t]));
+
+  const extMap = new Map();
+  if (separated.ext.length > 0) {
+    const keys = separated.ext.map(id => metaKey(id));
+    const metas = await client.mGet(keys);
+    separated.ext.forEach((id, idx) => {
+      const json = metas[idx];
+      if (json) {
+        try {
+          extMap.set(id, JSON.parse(json));
+        } catch (e) { }
+      }
+    });
+  }
+
+  const expanded = ensured.map(id => {
+    if (dbMap.has(id)) return dbMap.get(id);
+    if (extMap.has(id)) return { ...extMap.get(id), track_id: id };
+    return {
+      track_id: id,
+      title: 'External Track',
+      artists: [],
+      album: {},
+      duration: 0
+    };
   });
 
   return res.status(201).json({ items: expanded, total: ensured.length });
