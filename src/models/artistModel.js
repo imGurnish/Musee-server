@@ -103,17 +103,90 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
 
-    // Join artists with users and fetch all columns from both (users nested)
+    // Base admin query — join from users to artists (1:1 PK→FK)
     let qb = client()
-        .from(table)
-        .select('*, users:users!artists_artist_id_fkey(*)', { count: 'exact' })
-        .order('created_at', { ascending: false });
-    if (q) qb = qb.ilike('bio', `%${q}%`);
+        .from("users")
+        .select(`
+            user_id,
+            name,
+            email,
+            avatar_url,
+            subscription_type,
+            plan_id,
+            playlists,
+            favorites,
+            followers_count,
+            followings_count,
+            last_login_at,
+            settings,
+            user_type,
+            created_at,
+            updated_at,
+            artists:artists!artists_artist_id_fkey (
+                artist_id,
+                bio,
+                cover_url,
+                genres,
+                debut_year,
+                is_verified,
+                social_links,
+                monthly_listeners,
+                created_at,
+                updated_at,
+                region_id,
+                date_of_birth
+            )
+        `, { count: "exact" })
+        .eq("user_type", "artist") // Admin: only artist users
+        .order("created_at", { ascending: false });
+
+    // Search by user.name OR artists.bio
+    if (q) {
+        qb = qb.or(`name.ilike.%${q}%,artists.bio.ilike.%${q}%`);
+    }
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
-    return { items: data, total: count };
+
+    // Convert to Admin API format
+    const items = data.map(row => ({
+        artist_id: row.artists?.artist_id,
+        bio: row.artists?.bio,
+        cover_url: row.artists?.cover_url,
+        genres: row.artists?.genres || [],
+        debut_year: row.artists?.debut_year,
+        is_verified: row.artists?.is_verified,
+        social_links: row.artists?.social_links || null,
+        monthly_listeners: row.artists?.monthly_listeners || 0,
+        created_at: row.artists?.created_at,
+        updated_at: row.artists?.updated_at,
+        region_id: row.artists?.region_id,
+        date_of_birth: row.artists?.date_of_birth,
+
+        // full nested user object
+        users: {
+            user_id: row.user_id,
+            name: row.name,
+            email: row.email,
+            avatar_url: row.avatar_url,
+            subscription_type: row.subscription_type,
+            plan_id: row.plan_id,
+            playlists: row.playlists,
+            favorites: row.favorites,
+            followers_count: row.followers_count,
+            followings_count: row.followings_count,
+            last_login_at: row.last_login_at,
+            settings: row.settings,
+            user_type: row.user_type,
+            created_at: row.created_at,
+            updated_at: row.updated_at
+        }
+    }));
+
+    return { items, total: count };
 }
+
+
 
 async function getArtist(artist_id) {
     const { data, error } = await client()
@@ -144,43 +217,49 @@ async function deleteArtist(artist_id) {
     if (error) throw error;
 }
 
-//public functions
 async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
 
-    // Join artists with users to expose public profile fields from users
-    // Select only public fields
+    // Search users first (because name lives in users table)
     let qb = client()
-        .from(table)
-        .select(
-            `artist_id, cover_url, bio, genres, debut_year, is_verified, monthly_listeners,
-             users:users!artists_artist_id_fkey(name, avatar_url)`,
-            { count: 'exact' }
-        )
-        .order('created_at', { ascending: false });
+        .from("users")
+        .select(`
+      user_id,
+      name,
+      avatar_url,
+      artists:artists!artists_artist_id_fkey (
+        bio,
+        cover_url,
+        genres,
+        debut_year,
+        is_verified,
+        monthly_listeners
+      )
+    `, { count: "exact" })
+        .eq("user_type", "artist") // Only artist users
+        .order("created_at", { ascending: false });
 
+    // Search by user name
     if (q) {
-        // Search in artist bio or user name
-        // Wrap the OR expression in parentheses to form a valid PostgREST logic tree
-        qb = qb.or(`(bio.ilike.%${q}%,users.name.ilike.%${q}%)`);
+        qb = qb.ilike("name", `%${q}%`);
     }
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
 
-    // Flatten nested users fields
-    const items = (data || []).map(row => ({
-        artist_id: row.artist_id,
-        name: row.users?.name || null,
-        avatar_url: row.users?.avatar_url || null,
-        cover_url: row.cover_url,
-        bio: row.bio,
-        genres: row.genres,
-        debut_year: row.debut_year,
-        is_verified: row.is_verified,
-        monthly_listeners: row.monthly_listeners,
+    // Build final artist response
+    const items = data.map(row => ({
+        artist_id: row.user_id, // same as artist_id in artists table
+        name: row.name,
+        avatar_url: row.avatar_url,
+        cover_url: row.artists?.cover_url ?? null,
+        bio: row.artists?.bio ?? null,
+        genres: row.artists?.genres ?? [],
+        debut_year: row.artists?.debut_year ?? null,
+        is_verified: row.artists?.is_verified ?? false,
+        monthly_listeners: row.artists?.monthly_listeners ?? 0,
     }));
 
     return { items, total: count };
