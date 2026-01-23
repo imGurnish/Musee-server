@@ -387,3 +387,45 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
 
 module.exports.listAlbumsByArtist = listAlbumsByArtist;
 module.exports.listAlbumsByArtistUser = listAlbumsByArtistUser;
+
+async function listTrendingAlbumsUser({ limit = 20, offset = 0 } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            album_id, title, cover_url, duration, created_at, likes_count,
+            album_artists:album_artists!album_artists_album_id_fkey(
+                role,
+                artists:artists!album_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `, { count: 'exact' })
+        .eq('is_published', true)
+        .order('likes_count', { ascending: false })
+        .order('created_at', { ascending: false });
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    const items = (data || []).map(row => ({
+        type: 'album', // Explicit type
+        album_id: row.album_id,
+        title: row.title,
+        cover_url: row.cover_url,
+        duration: row.duration,
+        created_at: row.created_at,
+        artists: (row.album_artists || []).map(a => ({
+            artist_id: a?.artists?.artist_id || null,
+            name: a?.artists?.users?.name || null,
+            avatar_url: a?.artists?.users?.avatar_url || null,
+            role: a?.role || null,
+        }))
+    }));
+    return { items, total: count };
+}
+
+module.exports.listTrendingAlbumsUser = listTrendingAlbumsUser;

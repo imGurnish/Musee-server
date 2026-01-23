@@ -223,7 +223,8 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, duration, created_at,
+            track_id, title, duration, created_at, album_id,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -242,6 +243,10 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
         title: row.title,
         duration: row.duration,
         created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         hls: {
             master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
             variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
@@ -260,6 +265,7 @@ async function getTrackUser(track_id) {
         .from(table)
         .select(`
             track_id, title, album_id, duration, play_count, is_explicit, likes_count, created_at,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -279,6 +285,10 @@ async function getTrackUser(track_id) {
         track_id: data.track_id,
         title: data.title,
         album_id: data.album_id,
+        album: {
+            title: data.albums?.title,
+            cover_url: data.albums?.cover_url,
+        },
         duration: data.duration,
         play_count: data.play_count,
         is_explicit: data.is_explicit,
@@ -417,12 +427,14 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
 module.exports = { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksUser, getTrackUser, listTracksByArtist, listTracksByArtistUser };
 async function listTracksByIdsUser(trackIds = []) {
     if (!Array.isArray(trackIds) || trackIds.length === 0) return [];
-    const ids = trackIds.filter(Boolean);
+    // Only query UUIDs to avoid PostgreSQL errors
+    const ids = trackIds.filter(id => id && isUUID(id));
     if (ids.length === 0) return [];
     const { data, error } = await client()
         .from(table)
         .select(`
-            track_id, title, duration, created_at,
+            track_id, title, duration, created_at, album_id,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -438,6 +450,10 @@ async function listTracksByIdsUser(trackIds = []) {
         title: row.title,
         duration: row.duration,
         created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         hls: {
             master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
             variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
@@ -453,3 +469,47 @@ async function listTracksByIdsUser(trackIds = []) {
 }
 
 module.exports.listTracksByIdsUser = listTracksByIdsUser;
+
+async function listTrendingTracksUser({ limit = 20, offset = 0 } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    let qb = client()
+        .from(table)
+        .select(`
+            track_id, title, duration, created_at, album_id, play_count,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
+            track_artists:track_artists!track_artists_track_id_fkey(
+                artists:artists!track_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `, { count: 'exact' })
+        .eq('is_published', true)
+        .order('play_count', { ascending: false })
+        .order('created_at', { ascending: false }); // secondary sort
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+    const items = (data || []).map(row => ({
+        type: 'track', // Explicit type
+        track_id: row.track_id,
+        title: row.title,
+        duration: row.duration,
+        created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
+        artists: (row.track_artists || []).map(ta => ({
+            artist_id: ta?.artists?.artist_id || null,
+            name: ta?.artists?.users?.name || null,
+            avatar_url: ta?.artists?.users?.avatar_url || null,
+        })),
+    }));
+    return { items, total: count };
+}
+
+module.exports.listTrendingTracksUser = listTrendingTracksUser;

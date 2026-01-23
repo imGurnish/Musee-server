@@ -51,7 +51,18 @@ async function getQueue(req, res) {
   const ids = await ensureMinQueue(userId, 10);
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.json({ items: ids, total: ids.length });
-  const items = await listTracksByIdsUser(ids);
+
+  const found = await listTracksByIdsUser(ids);
+  const foundMap = new Map(found.map(i => [i.track_id, i]));
+
+  const items = ids.map(id => foundMap.get(id) || {
+    track_id: id,
+    title: 'External Track',
+    artists: [],
+    album: {},
+    duration: 0
+  });
+
   return res.json({ items, total: ids.length });
 }
 
@@ -144,7 +155,18 @@ async function playTrack(req, res) {
   const ensured = await ensureMinQueue(userId, 10);
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.status(201).json({ items: ensured, total: ensured.length });
-  const expanded = await listTracksByIdsUser(ensured);
+
+  const found = await listTracksByIdsUser(ensured);
+  const foundMap = new Map(found.map(i => [i.track_id, i]));
+
+  const expanded = ensured.map(id => foundMap.get(id) || {
+    track_id: id,
+    title: 'External Track',
+    artists: [],
+    album: {},
+    duration: 0
+  });
+
   return res.status(201).json({ items: expanded, total: ensured.length });
 }
 
