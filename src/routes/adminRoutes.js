@@ -23,4 +23,11 @@ router.use('/countries', countriesRoutes);
 router.use('/regions', regionsRoutes);
 router.use('/metrics', metricsRoutes);
 
+try {
+	const importRoutes = require('./admin/importRoutes');
+	router.use('/import', importRoutes);
+} catch (error) {
+	console.warn('Import routes not mounted:', error?.message || error);
+}
+
 module.exports = router;

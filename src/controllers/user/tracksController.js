@@ -1,4 +1,5 @@
 const createError = require('http-errors');
+const { supabase, supabaseAdmin } = require('../../db/config');
 const { processAudioBuffer } = require('../../utils/processAudio');
 const { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksUser, getTrackUser } = require('../../models/trackModel');
 const { getAlbum } = require('../../models/albumModel');
@@ -94,8 +95,13 @@ async function create(req, res) {
             result = await updateTrack(created.track_id, { is_published: true });
         } catch (e) {
             console.error('Audio processing failed after track creation:', e?.message || e);
-            // return created record but indicate processing failed
-            return res.status(500).json({ error: 'Audio processing failed', track: created });
+            // rollback created track to avoid half-data
+            try { await deleteTrack(created.track_id); } catch (_) { }
+            return res.status(500).json({
+                error: 'Audio processing failed',
+                rolled_back: true,
+                track_id: created.track_id,
+            });
         }
     }
 
@@ -133,6 +139,9 @@ async function update(req, res) {
     // if audio file present, process it and update track_audios
     const audioFile = getFileFromReq(req, 'audio');
     if (audioFile) {
+        const db = supabaseAdmin || supabase;
+        const previousAudiosRes = await db.from('track_audios').select('*').eq('track_id', id);
+        const previousAudios = previousAudiosRes.error ? [] : (previousAudiosRes.data || []);
         try {
             const audioResult = await processAudioBuffer(audioFile, id);
             await deleteAudiosForTrack(id);
@@ -145,6 +154,13 @@ async function update(req, res) {
             result = await updateTrack(id, { is_published: true });
         } catch (e) {
             console.error('Audio processing failed during update:', e?.message || e);
+            // restore old rows to keep consistency
+            try {
+                await deleteAudiosForTrack(id);
+                for (const a of previousAudios) {
+                    await addTrackAudio(id, a.ext, a.bitrate, a.path);
+                }
+            } catch (_) { }
             return res.status(500).json({ error: 'Audio processing failed', track_id: id });
         }
     }

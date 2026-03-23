@@ -6,6 +6,16 @@ const { createAuthUser } = require('../../models/authUserModel');
 const { listTracksByArtist } = require('../../models/trackModel');
 const { listAlbumsByArtist } = require('../../models/albumModel');
 const { isUUID } = require('../../utils/validators');
+const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
+
+function parseJsonMaybe(value) {
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        return value;
+    }
+}
 
 function isEmailExistsError(error) {
     return error?.code === 'email_exists' || error?.status === 422;
@@ -35,8 +45,36 @@ async function getOne(req, res) {
 async function create(req, res) {
     // Sanitize inputs BEFORE any DB operations
     const body = { ...req.body };
+    body.external_payload = parseJsonMaybe(body.external_payload);
+    const providerCode = body.source || 'jiosaavn';
+    const extArtistId = body.ext_artist_id || body.external_id || null;
     let artist_id = req.body.artist_id;
     const avatarFile = req.files?.avatar?.[0];
+
+    if (extArtistId) {
+        const providerId = await getProviderId(providerCode);
+        const existingArtistId = await findEntityIdByExternalId({
+            refTable: 'artist_external_refs',
+            entityIdColumn: 'artist_id',
+            providerId,
+            externalId: extArtistId,
+        });
+
+        if (existingArtistId) {
+            const existingArtist = await getArtist(existingArtistId);
+            await upsertExternalRef({
+                refTable: 'artist_external_refs',
+                entityIdColumn: 'artist_id',
+                entityId: existingArtistId,
+                providerId,
+                externalId: extArtistId,
+                externalUrl: body.artist_url || body.perma_url || body.external_url || null,
+                imageUrl: body.image || body.avatar_url || body.cover_url || null,
+                rawPayload: body.external_payload || null,
+            });
+            return res.status(200).json(existingArtist);
+        }
+    }
 
     if (!artist_id) {
         const userInput = sanitizeUserInsert(body);
@@ -85,6 +123,20 @@ async function create(req, res) {
         if (!existing) throw err;
         artist = existing;
         created = false;
+    }
+
+    if (extArtistId) {
+        const providerId = await getProviderId(providerCode);
+        await upsertExternalRef({
+            refTable: 'artist_external_refs',
+            entityIdColumn: 'artist_id',
+            entityId: artist.artist_id,
+            providerId,
+            externalId: extArtistId,
+            externalUrl: body.artist_url || body.perma_url || body.external_url || null,
+            imageUrl: body.image || body.avatar_url || body.cover_url || null,
+            rawPayload: body.external_payload || null,
+        });
     }
 
     // Upload cover if provided and update

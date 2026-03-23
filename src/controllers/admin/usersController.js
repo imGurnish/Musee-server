@@ -25,12 +25,21 @@ async function create(req, res) {
     // req.file may be provided by multer
     const payload = sanitizeUserInsert({ ...req.body });
     console.log(payload);
-    // create user record first to ensure user_id exists in auth
-    const authUser = await createAuthUser(payload.name, payload.email, payload.password);
+    let authUser = null;
+    let user_final = null;
+    try {
+        // create user record first to ensure user_id exists in auth
+        authUser = await createAuthUser(payload.name, payload.email, payload.password);
 
-    //it automatically sets some columns in users table
-    //lets update other fields
-    const user_final = await updateUser(authUser.id, payload);
+        //it automatically sets some columns in users table
+        //lets update other fields
+        user_final = await updateUser(authUser.id, payload);
+    } catch (error) {
+        if (authUser?.id) {
+            try { await deleteAuthUser(authUser.id); } catch (_) { }
+        }
+        throw error;
+    }
 
     // upload avatar if file present    
     if (req.file) {
@@ -67,8 +76,12 @@ async function remove(req, res) {
         return res.status(404).json({ message: 'User not found' });
     }
     await deleteUserAvatarFromStorage(id, user.avatar_url);
-    await deleteUser(id);
+
+    // Prefer deleting auth record first (FK cascade handles users row),
+    // then issue a best-effort users delete to avoid leftovers.
     await deleteAuthUser(id);
+    try { await deleteUser(id); } catch (_) { }
+
     res.status(204).send();
 }
 

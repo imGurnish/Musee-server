@@ -3,6 +3,16 @@ const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlayli
 const { addPlaylistTrack, removePlaylistTrack } = require('../../models/playlistTracksModel');
 const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
 const { isUUID } = require('../../utils/validators');
+const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
+
+function parseJsonMaybe(value) {
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        return value;
+    }
+}
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -23,7 +33,51 @@ async function getOne(req, res) {
 
 async function create(req, res) {
     const payload = { ...req.body };
+    payload.external_payload = parseJsonMaybe(payload.external_payload);
+    const providerCode = payload.source || 'jiosaavn';
+    const extPlaylistId = payload.ext_playlist_id || payload.external_id || null;
+
+    if (extPlaylistId) {
+        const providerId = await getProviderId(providerCode);
+        const existingPlaylistId = await findEntityIdByExternalId({
+            refTable: 'playlist_external_refs',
+            entityIdColumn: 'playlist_id',
+            providerId,
+            externalId: extPlaylistId,
+        });
+
+        if (existingPlaylistId) {
+            const existingPlaylist = await getPlaylist(existingPlaylistId);
+            await upsertExternalRef({
+                refTable: 'playlist_external_refs',
+                entityIdColumn: 'playlist_id',
+                entityId: existingPlaylistId,
+                providerId,
+                externalId: extPlaylistId,
+                externalUrl: payload.playlist_url || payload.perma_url || payload.external_url || null,
+                imageUrl: payload.image || payload.cover_url || null,
+                rawPayload: payload.external_payload || null,
+            });
+            return res.status(200).json(existingPlaylist);
+        }
+    }
+
     const playlist = await createPlaylist(payload);
+
+    if (extPlaylistId) {
+        const providerId = await getProviderId(providerCode);
+        await upsertExternalRef({
+            refTable: 'playlist_external_refs',
+            entityIdColumn: 'playlist_id',
+            entityId: playlist.playlist_id,
+            providerId,
+            externalId: extPlaylistId,
+            externalUrl: payload.playlist_url || payload.perma_url || payload.external_url || null,
+            imageUrl: payload.image || payload.cover_url || null,
+            rawPayload: payload.external_payload || null,
+        });
+    }
+
     if (req.file) {
         const coverUrl = await uploadPlaylistCoverToStorage(playlist.playlist_id, req.file);
         if (coverUrl) {

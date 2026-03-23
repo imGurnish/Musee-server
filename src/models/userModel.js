@@ -148,6 +148,31 @@ async function createUser(payload) {
     return data;
 }
 
+/**
+ * Create an import user (without auth_user)
+ * Used for programmatic imports where no authentication is needed
+ * Sets user_id to NULL (import users don't have auth credentials)
+ * @param {Object} payload - User data (name, email, user_type, etc.)
+ * @returns {Promise<Object>} Created user
+ */
+async function createImportUser(payload) {
+    const input = sanitizeUserInsert(payload);
+    // Import users don't have auth_user, so user_id remains NULL
+    const insertData = {
+        ...input,
+        user_id: null // Explicitly set NULL for import users
+    };
+    
+    const { data, error } = await client()
+        .from(table)
+        .insert(insertData)
+        .select('*')
+        .single();
+    
+    if (error) throw error;
+    return data;
+}
+
 async function updateUser(user_id, payload) {
     const input = sanitizeUserUpdate(payload);
     const { data, error } = await client().from(table).update({ ...input, updated_at: new Date().toISOString() }).eq('user_id', user_id).select('*').single();
@@ -182,4 +207,4 @@ async function getUserPublic(user_id) {
     return data;
 }
 
-module.exports = { listUsers, listUsersPublic, getUser, getUserByEmail, getUserPublic, createUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };
+module.exports = { listUsers, listUsersPublic, getUser, getUserByEmail, getUserPublic, createUser, createImportUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };

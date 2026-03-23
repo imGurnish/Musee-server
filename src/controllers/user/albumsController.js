@@ -41,9 +41,17 @@ async function create(req, res) {
     const artist = await getArtist(req.user.id);
     if (!artist) throw createError(403, 'Only artists can create albums');
 
-    const album = await createAlbum(payload);
-    // Link the creating artist as owner of the album
-    await createAlbumArtist(album.album_id, req.user.id, 'owner');
+    let album;
+    try {
+        album = await createAlbum(payload);
+        // Link the creating artist as owner of the album
+        await createAlbumArtist(album.album_id, req.user.id, 'owner');
+    } catch (error) {
+        if (album?.album_id) {
+            try { await deleteAlbum(album.album_id); } catch (_) { }
+        }
+        throw error;
+    }
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(album.album_id, req.file);
         if (coverUrl) {
