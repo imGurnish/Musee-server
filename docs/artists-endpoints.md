@@ -1,248 +1,69 @@
-# Artists API (Admin and User)
-
-This document describes the Artists endpoints used by Admin and User APIs. It covers request/response shapes, authentication, validations, and examples.
+# Artists API
 
 Base paths:
-- Admin: `/api/admin/artists` (requires Admin auth)
-- User: `/api/user/artists` (requires User auth)
+- Admin: `/api/admin/artists`
+- User: `/api/user/artists`
 
-Uploads:
-- Cover image uploads use `multipart/form-data` with a single file field named `cover` (2MB limit).
-- Admin create also supports an `avatar` file for the linked user via the `uploadAvatarAndCover` middleware.
+## Schema alignment
 
-Pagination & search:
-- Query params:
-  - `page` (number, default 0) — zero-based page index
-  - `limit` (number, default 20, max 100)
-  - `q` (string, optional) — searches `bio` and user `name` for public lists
-- List responses: `{ items, total, page, limit }`
+- Core table: `artists` (1:1 with `users` via `artist_id=user_id`)
+- Genre links: `artist_genres`
+- External refs: `artist_external_refs`
 
----
+## Artist object
 
-## Admin endpoints
-
-### GET /api/admin/artists
-List artists (admin, full records).
-
-Query params: `page`, `limit`, `q`
-
-Response item fields:
-```
+```json
 {
-  artist_id: "uuid",
-  bio: "string",
-  cover_url: "string|null",
-  genres: ["string"],
-  debut_year: number|null,
-  is_verified: boolean,
-  social_links: { ... } | null,
-  monthly_listeners: number,
-  created_at: "ISO timestamp",
-  updated_at: "ISO timestamp",
-  region_id: "uuid",
-  date_of_birth: "YYYY-MM-DD" | null,
-  users: {    // nested user profile from users table
-      user_id: "uuid",
-      name: "string",
-      email: "string",
-      avatar_url: "string|null",
-      ... // other user fields
+  "artist_id": "uuid",
+  "bio": "string|null",
+  "cover_url": "string|null",
+  "debut_year": 2020,
+  "is_verified": false,
+  "social_links": {},
+  "monthly_listeners": 0,
+  "region_id": "uuid|null",
+  "date_of_birth": "YYYY-MM-DD|null",
+  "created_at": "ISO",
+  "updated_at": "ISO",
+  "genres": [],
+  "users": {
+    "user_id": "uuid",
+    "name": "string",
+    "email": "string",
+    "avatar_url": "string|null",
+    "user_type": "listener|artist|admin"
   }
 }
 ```
 
----
+## Admin endpoints
 
-### GET /api/admin/artists/:id
-Get one artist (admin). Returns the same full shape as above.
+- `GET /api/admin/artists` → paginated list (`page`, `limit`, `q`)
+- `GET /api/admin/artists/:id` → one artist
+- `POST /api/admin/artists` → create artist
+  - supports existing `artist_id` OR user creation (`name/email/password`)
+- `PATCH /api/admin/artists/:id` → update artist
+- `DELETE /api/admin/artists/:id` → delete artist
 
-Errors:
-- 404 if not found
-
----
-
-### POST /api/admin/artists
-Create an artist. Admin may either provide `artist_id` (existing user) or provide user fields to create the underlying user.
-
-Middleware: `uploadAvatarAndCover` (supports `avatar` and `cover` file fields)
-
-Body options:
-- Option A: Provide `artist_id` and artist fields
-```
-{ "artist_id": "uuid", "bio": "string", ... }
-```
-- Option B: Provide user fields (name, email, password) plus artist fields — controller will create a user and then the artist
-```
-{ "name": "string", "email": "string", "password": "string", "bio": "string", ... }
-```
-
-Important validations (backend enforced):
-- `bio` is required
-- `artist_id` must be a UUID when provided
-- `debut_year` if provided must be between 1900 and current year
-- `region_id` if provided must be a UUID
-
-Response:
-- 201 with created artist (after optional avatar/cover processing)
-
----
-
-### PATCH /api/admin/artists/:id
-Update an artist (admin).
-
-Body fields (any subset):
-```
-{ "bio": "string", "cover_url": "string", "genres": ["string"], "debut_year": number, "is_verified": boolean, "monthly_listeners": number, "region_id": "uuid", "date_of_birth": "YYYY-MM-DD", "social_links": { ... } }
-```
-
-Response:
-- 200 with updated artist
-- 404 if not found
-
----
-
-### DELETE /api/admin/artists/:id
-Delete an artist (admin).
-
-Response:
-- 204 No Content
-- 404 if not found
-
----
+### Admin related lists
+- `GET /api/admin/artists/:id/tracks`
+- `GET /api/admin/artists/:id/albums`
 
 ## User endpoints
 
-### GET /api/user/artists
-List public artists (minimal profile fields + linked user public fields).
+- `GET /api/user/artists`
+- `GET /api/user/artists/:id`
+- `POST /api/user/artists` → create own artist profile
+- `PATCH /api/user/artists/:id` → update own profile only
+- `DELETE /api/user/artists/:id` → delete own profile only
+- `GET /api/user/artists/:id/tracks`
+- `GET /api/user/artists/:id/albums`
 
-Query params: `page`, `limit`, `q`
+### User writable fields
 
-Response item fields:
-```
-{
-  artist_id: "uuid",
-  name: "string|null",          // from linked user
-  avatar_url: "string|null",   // from linked user
-  cover_url: "string|null",
-  bio: "string",
-  genres: ["string"],
-  debut_year: number|null,
-  is_verified: boolean,
-  monthly_listeners: number
-}
-```
+`bio`, `cover_url`, `social_links`, `region_id`, `date_of_birth`, `debut_year`
 
----
+## Notes
 
-### GET /api/user/artists/:id
-Get a single public artist profile with linked user public fields.
-
-Response fields:
-```
-{ artist_id, name, avatar_url, cover_url, bio, genres, debut_year, is_verified, monthly_listeners }
-```
-
-Errors:
-- 404 if not found
-
----
-
-### GET /api/admin/artists/:id/tracks
-List all tracks linked to an artist (no publish filter).
-
-Query params: `page`, `limit`, `q`
-
-Response: `{ items, total, page, limit }`
-- Each item includes: `track_id, title, album_id, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published, hls { master, variants[] }, artists[], audios[]`
-
----
-
-### GET /api/admin/artists/:id/albums
-List all albums linked to an artist (no publish filter).
-
-Query params: `page`, `limit`, `q`
-
-Response: `{ items, total, page, limit }`
-- Each item includes: `album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration, artists[]`
-
----
-
-### POST /api/user/artists
-Create artist profile for the authenticated user (user becomes artist).
-
-Requirements:
-- Authenticated user (`req.user`), user ID used as `artist_id`.
-- If an artist profile already exists for this user, returns 409.
-
-Allowed fields (from request body):
-```
-{ "bio": "string", "cover_url": "string", "genres": ["string"], "social_links": {...}, "region_id": "uuid", "date_of_birth": "YYYY-MM-DD", "debut_year": number }
-```
-
-Upload:
-- `cover` file via multipart/form-data (optional)
-
-Response:
-- 201 with created artist
-- 401 if not authenticated
-- 409 if artist already exists
-
----
-
-### PATCH /api/user/artists/:id
-Update your own artist profile (authenticated user only).
-
-- Caller must be the same user as `:id`.
-- Allowed fields same as POST.
-- Optional `cover` upload updates cover_url.
-
-Response:
-- 200 updated artist
-- 403 if not owner
-- 404 if not found
-
----
-
-### DELETE /api/user/artists/:id
-Delete your own artist profile.
-
-- Caller must be the same user as `:id`.
-- After deletion, controller attempts to set `user.user_type` back to 'listener'.
-
-Response:
-- 204 No Content
-- 403 if not owner
-- 404 if not found
-
----
-
-### GET /api/user/artists/:id/tracks
-List published tracks for a given artist.
-
-Query params: `page`, `limit`, `q`
-
-Response: `{ items, total, page, limit }`
-- Each item includes: `track_id, title, duration, created_at, hls { master, variants[] }, artists[]`
-
----
-
-### GET /api/user/artists/:id/albums
-List published albums for a given artist.
-
-Query params: `page`, `limit`, `q`
-
-Response: `{ items, total, page, limit }`
-- Each item includes: `album_id, title, cover_url, duration, created_at, artists[]`
-
----
-
-## Notes & recommendations
-- `date_of_birth` is served as a DATE (`YYYY-MM-DD`); controllers use `toDateOnly` to normalize.
-- `debut_year` is optional now; previously the model required it — adjusted to accept omission.
-- `region_id` is optional; DB provides a default if omitted.
-- Consider adding a uniqueness constraint on `artists.artist_id` (if not already present) to enforce 1:1 user->artist mapping.
-- For admin creation when providing user fields, controllers create the user first and then create the artist with `artist_id = user.user_id`.
-
----
-
-If you'd like, I can also generate a small Postman/Thunder-collection JSON for these endpoints for frontend testing.
+- Legacy direct `artists.genres` array column is removed; genres are normalized in `artist_genres`.
+- API currently returns `genres: []` for compatibility.

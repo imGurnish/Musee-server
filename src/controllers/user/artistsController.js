@@ -14,7 +14,7 @@ const { uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can update about themselves
-    const allowed = new Set(['bio', 'cover_url', 'genres', 'social_links', 'region_id', 'date_of_birth', 'debut_year']);
+    const allowed = new Set(['bio', 'cover_url', 'social_links', 'region_id', 'date_of_birth', 'debut_year']);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];

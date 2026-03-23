@@ -4,7 +4,7 @@ const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../.
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can update about themselves
-    const allowed = new Set(['name', 'settings', 'playlists']);
+    const allowed = new Set(['name', 'settings']);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];

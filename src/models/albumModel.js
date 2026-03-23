@@ -1,6 +1,6 @@
 const { supabase, supabaseAdmin } = require('../db/config');
 const { isUUID, isNonEmptyString, } = require('../utils/validators');
-const { toDateOnly, toTextArray, toNum } = require('../utils/typeConversions');
+const { toDateOnly, toNum } = require('../utils/typeConversions');
 const table = 'albums';
 
 function client() {
@@ -18,9 +18,6 @@ function sanitizeAlbumInsert(payload = {}) {
     if (payload.release_date !== undefined) out.release_date = toDateOnly(payload.release_date);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png';
-
-    const genres = toTextArray(payload.genres);
-    if (genres !== undefined) out.genres = genres;
 
     if (payload.duration !== undefined) {
         const duration = toNum(payload.duration, null);
@@ -42,9 +39,6 @@ function sanitizeAlbumUpdate(payload = {}) {
     if (payload.release_date !== undefined) out.release_date = toDateOnly(payload.release_date);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png';
-
-    const genres = toTextArray(payload.genres);
-    if (genres !== undefined) out.genres = genres;
 
     // if (payload.total_tracks !== undefined) out.total_tracks = Math.max(0, Math.trunc(toNum(payload.total_tracks, 0)));
     // if (payload.likes_count !== undefined) out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
@@ -69,7 +63,7 @@ async function listAlbums({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration,
+            album_id, title, description, cover_url, total_tracks, likes_count, created_at, updated_at, is_published, duration,
             album_artists:album_artists!album_artists_album_id_fkey(
                 role,
                 artists:artists!album_artists_artist_id_fkey(
@@ -87,7 +81,7 @@ async function listAlbums({ limit = 20, offset = 0, q } = {}) {
         title: row.title,
         description: row.description,
         cover_url: row.cover_url,
-        genres: row.genres,
+        genres: [],
         total_tracks: row.total_tracks,
         likes_count: row.likes_count,
         created_at: row.created_at,
@@ -106,7 +100,7 @@ async function listAlbums({ limit = 20, offset = 0, q } = {}) {
 
 async function getAlbum(album_id) {
     const { data, error } = await client().from(table).select(`
-        album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration,
+        album_id, title, description, cover_url, total_tracks, likes_count, created_at, updated_at, is_published, duration,
         album_artists:album_artists!album_artists_album_id_fkey(
             role,
             artists:artists!album_artists_artist_id_fkey(
@@ -162,7 +156,7 @@ async function getAlbum(album_id) {
         title: data.title,
         description: data.description,
         cover_url: data.cover_url,
-        genres: data.genres,
+        genres: [],
         total_tracks: data.total_tracks,
         likes_count: data.likes_count,
         created_at: data.created_at,
@@ -308,7 +302,7 @@ async function listAlbumsByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     let qb = client()
         .from(table)
         .select(`
-            album_id, title, description, cover_url, genres, total_tracks, likes_count, created_at, updated_at, is_published, duration,
+            album_id, title, description, cover_url, total_tracks, likes_count, created_at, updated_at, is_published, duration,
             album_artists:album_artists!inner(
                 role,
                 artists:artists!album_artists_artist_id_fkey(
@@ -327,7 +321,7 @@ async function listAlbumsByArtist({ artist_id, limit = 20, offset = 0, q } = {})
         title: row.title,
         description: row.description,
         cover_url: row.cover_url,
-        genres: row.genres,
+        genres: [],
         total_tracks: row.total_tracks,
         likes_count: row.likes_count,
         created_at: row.created_at,

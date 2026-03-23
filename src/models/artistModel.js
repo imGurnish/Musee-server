@@ -1,5 +1,5 @@
 const { supabase, supabaseAdmin } = require('../db/config');
-const { toNum, toDateOnly, toTextArray } = require('../utils/typeConversions');
+const { toNum, toDateOnly } = require('../utils/typeConversions');
 const { isUUID } = require('../utils/validators');
 const table = 'artists';
 
@@ -17,26 +17,6 @@ function toBoolean(v) {
     return Boolean(v);
 }
 
-function normalizeGenres(val) {
-    if (val === undefined) return undefined;
-    if (Array.isArray(val)) return val.map(String);
-    if (typeof val === 'string') {
-        const trimmed = val.trim();
-        if (!trimmed) return [];
-        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-            try {
-                const parsed = JSON.parse(trimmed);
-                if (!Array.isArray(parsed)) throw new Error('genres must be an array');
-                return parsed.map(String);
-            } catch {
-                throw new Error('genres must be an array');
-            }
-        }
-        return toTextArray(trimmed);
-    }
-    throw new Error('genres must be an array');
-}
-
 function sanitizeArtistInsert(payload = {}) {
     const out = {};
     // artist_id required (references users.user_id)
@@ -48,8 +28,6 @@ function sanitizeArtistInsert(payload = {}) {
     out.bio = bio;
 
     out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png';
-
-    if (payload.genres !== undefined) out.genres = normalizeGenres(payload.genres);
 
     // debut_year is optional; validate if provided
     if (payload.debut_year !== undefined) {
@@ -90,8 +68,6 @@ function sanitizeArtistUpdate(payload = {}) {
     const out = {};
     if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : null;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
-
-    if (payload.genres !== undefined) out.genres = normalizeGenres(payload.genres);
 
     if (payload.debut_year !== undefined) {
         const debut_year = toNum(payload.debut_year, null);
@@ -137,8 +113,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
             avatar_url,
             subscription_type,
             plan_id,
-            playlists,
-            favorites,
             followers_count,
             followings_count,
             last_login_at,
@@ -150,7 +124,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
                 artist_id,
                 bio,
                 cover_url,
-                genres,
                 debut_year,
                 is_verified,
                 social_links,
@@ -177,7 +150,7 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
         artist_id: row.artists?.artist_id,
         bio: row.artists?.bio,
         cover_url: row.artists?.cover_url,
-        genres: row.artists?.genres || [],
+        genres: [],
         debut_year: row.artists?.debut_year,
         is_verified: row.artists?.is_verified,
         social_links: row.artists?.social_links || null,
@@ -195,8 +168,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
             avatar_url: row.avatar_url,
             subscription_type: row.subscription_type,
             plan_id: row.plan_id,
-            playlists: row.playlists,
-            favorites: row.favorites,
             followers_count: row.followers_count,
             followings_count: row.followings_count,
             last_login_at: row.last_login_at,
@@ -256,7 +227,6 @@ async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
       artists:artists!artists_artist_id_fkey (
         bio,
         cover_url,
-        genres,
         debut_year,
         is_verified,
         monthly_listeners
@@ -280,7 +250,7 @@ async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
         avatar_url: row.avatar_url,
         cover_url: row.artists?.cover_url ?? null,
         bio: row.artists?.bio ?? null,
-        genres: row.artists?.genres ?? [],
+        genres: [],
         debut_year: row.artists?.debut_year ?? null,
         is_verified: row.artists?.is_verified ?? false,
         monthly_listeners: row.artists?.monthly_listeners ?? 0,
@@ -293,7 +263,7 @@ async function getArtistUser(artist_id) {
     const { data, error } = await client()
         .from(table)
         .select(
-            `artist_id, cover_url, bio, genres, debut_year, is_verified, monthly_listeners,
+            `artist_id, cover_url, bio, debut_year, is_verified, monthly_listeners,
              users:users!artists_artist_id_fkey(name, avatar_url)`
         )
         .eq('artist_id', artist_id)
@@ -306,7 +276,7 @@ async function getArtistUser(artist_id) {
         avatar_url: data.users?.avatar_url || null,
         cover_url: data.cover_url,
         bio: data.bio,
-        genres: data.genres,
+        genres: [],
         debut_year: data.debut_year,
         is_verified: data.is_verified,
         monthly_listeners: data.monthly_listeners,

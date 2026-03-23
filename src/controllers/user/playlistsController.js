@@ -5,7 +5,7 @@ const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on playlists
-    const allowed = new Set(['name', 'description', 'genres', 'is_public']);
+    const allowed = new Set(['name', 'description', 'is_public', 'language_code']);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];
@@ -78,7 +78,7 @@ async function addTrack(req, res) {
     if (!playlist) throw createError(404, 'Playlist not found');
     if (playlist.creator_id && req.user && playlist.creator_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
     if (!track_id) return res.status(400).json({ error: 'track_id is required' });
-    await addPlaylistTrack(id, track_id);
+    await addPlaylistTrack(id, track_id, req.user?.id || null);
     const updated = await getPlaylist(id);
     res.status(200).json(updated);
 }

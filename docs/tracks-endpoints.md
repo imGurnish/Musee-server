@@ -1,339 +1,114 @@
 # Tracks API
 
-This document describes the Tracks endpoints for both Admin and User APIs, aligned with the normalized schema that uses `track_artists` and `track_audios` tables.
+This document reflects the normalized V2 schema and current backend behavior.
 
-Key points:
-- Pagination is zero-based: page 0 is the first page. `limit` is capped at 100.
-- Audio uploads generate variants and are stored in `track_audios` with fields: `ext`, `bitrate` (kbps), and `path` (URL).
-- Artists linked to a track are exposed via `artists` array on responses (sourced from `track_artists`).
-- Tracks do not have a cover image; use the album's `cover_url`.
-- HLS: responses include a `hls` object with a public `master` m3u8 URL and per-quality variant m3u8 URLs when the HLS container is public.
-- External import metadata from JioSaavn can be stored on `tracks` (see SQL migration: `docs/sql/2026-03-23-add-jiosaavn-track-columns.sql`).
+Base paths:
+- Admin: `/api/admin/tracks`
+- User: `/api/user/tracks`
 
-## Common object shape
+## Schema alignment
 
-Track object (admin responses include more fields; user list is a smaller projection):
+- Core table: `tracks`
+- Artist links: `track_artists`
+- Audio variants: `track_assets` (`asset_type='audio_progressive'`)
+- External metadata: `track_external_refs`, `external_track_credits`
+- HLS URLs are returned from blob path convention and optional `hls_master_path`
 
-```
+## Track object (admin)
+
+```json
 {
   "track_id": "uuid",
   "title": "string",
+  "subtitle": "string|null",
   "album_id": "uuid",
+  "track_number": 1,
+  "disc_number": 1,
+  "duration": 215,
+  "language_code": "en",
   "lyrics_url": "string|null",
-  "duration": 215,              // seconds, integer >= 0
+  "lyrics_snippet": "string|null",
   "play_count": 0,
   "is_explicit": false,
   "likes_count": 0,
   "popularity_score": 0,
+  "copyright_text": "string|null",
+  "label_id": "uuid|null",
+  "hls_master_path": "string|null",
+  "video_url": "string|null",
+  "is_published": true,
   "created_at": "ISO",
   "updated_at": "ISO",
-  "video_url": "string|null",
-  "is_published": true|false,
-  "ext_track_id": "string|null",
-  "source": "string|null",        // e.g. "jiosaavn"
-  "language": "string|null",
-  "release_date": "YYYY-MM-DD|null",
-  "music": "string|null",
-  "primary_artists": "string|null",
-  "featured_artists": "string|null",
-  "singers": "string|null",
-  "label": "string|null",
-  "perma_url": "string|null",
-  "media_preview_url": "string|null",
-  "rights": { ... } | null,
-  "artist_map": { ... } | null,
-  "hls": {                     // public HLS URLs (container must be public)
-    "master": "https://<account>.blob.core.windows.net/<container>/hls/track_<id>/master.m3u8",
-    "variants": [
-      { "bitrate": 96,  "url": "https://.../hls/track_<id>/v96/index.m3u8" },
-      { "bitrate": 160, "url": "https://.../hls/track_<id>/v160/index.m3u8" },
-      { "bitrate": 320, "url": "https://.../hls/track_<id>/v320/index.m3u8" }
-    ]
-  },
-  "artists": [                  // joined via track_artists → artists → users
-    {
-      "artist_id": "uuid",
-    }
-  ],
-  "audios": [                   // joined via track_audios (admin + user getById)
-    { "id": number, "ext": "mp3|ogg", "bitrate": 96|160|320, "path": "https://...", "created_at": "ISO" }
-  ]
-}
-```
-
-### JioSaavn payload mapping notes
-
-When importing JioSaavn tracks, these fields map directly to existing schema:
-- `song` -> `tracks.title`
-- `duration` -> `tracks.duration`
-- `play_count` -> `tracks.play_count`
-- `explicit_content` -> `tracks.is_explicit`
-
-These payload fields are newly supported as metadata columns on `tracks`:
-- `id`, `type`, `year`, `music`, `music_id`, `primary_artists`, `primary_artists_id`, `featured_artists`, `featured_artists_id`, `singers`, `starring`, `label`, `label_id`, `label_url`, `language`, `origin`, `is_drm`, `320kbps`, `is_dolby_content`, `has_lyrics`, `lyrics_snippet`, `copyright_text`, `encrypted_drm_media_url`, `encrypted_media_url`, `encrypted_media_path`, `media_preview_url`, `perma_url`, `album_url`, `rights`, `artistMap`, `release_date`, `vcode`, `vlink`, `triller_available`, `webp`, `cache_state`, `starred`.
-
-Recommended migration path:
-1. Run `docs/sql/2026-03-23-add-jiosaavn-track-columns.sql`.
-2. If needed, backfill new fields from your existing import payload cache.
-
-Files supported on create/update (multipart/form-data):
-- `audio` (binary) — triggers audio processing and sets `is_published=true` upon success
-- `video` (video)
-
----
-
-  ### POST /api/admin/tracks/:id/artists
-  Link an artist to a track with a role.
-
-  Body:
-  ```
-  { "artist_id": "<uuid>", "role": "owner|editor|viewer" }
-  ```
-
-  Response: `201 Created` with `{ track_id, artist_id, role, ... }`.
-
-  ### PATCH /api/admin/tracks/:id/artists/:artistId
-  Update a linked artist's role on a track.
-
-  Body: `{ "role": "owner|editor|viewer" }`
-
-  Response: `200 OK` with updated record.
-
-  ### DELETE /api/admin/tracks/:id/artists/:artistId
-  Unlink an artist from a track.
-
-  Response: `204 No Content`.
-
-## Admin API
-
-Base path: `/api/admin/tracks`
-
-### GET /api/admin/tracks
-List tracks with pagination and optional search.
-
-Query params:
-- `page` number (default 0)
-Response:
-```
-{
-  "items": [Track],
-  "total": number,
-  "page": number,
-  "limit": number
-}
-```
-
-### GET /api/admin/tracks/:id
-Fetch a single track by id.
-
-Response: `Track`
-
-### POST /api/admin/tracks
-Create a new track.
-
-- Content-Type: `multipart/form-data`
-  ### POST /api/user/tracks/:id/artists
-  Add an artist to your track. Only album owners may call this.
-
-  Body:
-  ```
-  { "artist_id": "<uuid>", "role": "owner|editor|viewer" }
-  ```
-
-  Rules:
-  - Only album owners can manage track artists.
-  - Album owners are always role `owner` on tracks; attempts to add them with a different role are coerced to `owner`.
-
-  Response: `201 Created`.
-
-  ### PATCH /api/user/tracks/:id/artists/:artistId
-  Change a linked artist's role on your track. Only album owners may call this.
-
-  Rules:
-  - You cannot change an album owner's role to anything other than `owner`.
-
-  Body: `{ "role": "owner|editor|viewer" }`
-
-  Response: `200 OK`.
-
-  ### DELETE /api/user/tracks/:id/artists/:artistId
-  Remove a linked artist from your track. Only album owners may call this.
-
-  Rules:
-  - You cannot remove album owners from a track.
-
-  Response: `204 No Content`.
-
-- Body (fields):
-  - `title` string (required)
-   - Roles semantics:
-     - `owner`: Full control on the track including adding/removing artists and updating roles.
-     - `editor`: Can edit track fields (title, lyrics_url, duration, is_explicit, is_published) but cannot manage artists.
-     - `viewer`: No edit permissions.
-     - All roles are still bounded by user-level permissions; system/admin-only fields remain restricted.
-  - `is_published` boolean (optional; if `audio` is uploaded and processed successfully, it will be set to true regardless)
-- Files: `audio` (required), `video` (optional)
-
-Additional artist linking:
-- Owners of the album (from `album_artists` with role `owner`) are automatically linked to the new track with role `owner`.
-- Optionally include `artists` in the body as JSON or form-data array: `artists=[{ "artist_id": "<uuid>", "role": "viewer|editor|owner" }]`. Invalid or duplicate links are ignored.
-
-Behavior:
-- Creates the track with `is_published=false` initially.
-- `album_id` is required for all tracks (including singles). `audio` is required.
-- On success, audio variants are generated (mp3 at source bitrate and ogg at 96/160/320kbps up to source bitrate), inserted into `track_audios`, and `is_published=true` is set.
-- If `video` provided, uploads and updates `video_url`.
-
-Response: `201 Created` with `Track`.
-
-### PATCH /api/admin/tracks/:id
-Update an existing track.
-
-- Content-Type: `multipart/form-data`
-- Body (any of): `title`, `album_id`, `duration`, `lyrics_url`, `is_explicit`, `is_published`
-- Files (optional): `audio`, `video`
-
-Behavior:
-- Updates provided fields.
-- If `audio` is provided, replaces all prior `track_audios` rows with newly generated variants and sets `is_published=true`.
-- If `video` is provided, uploads and updates `video_url`.
-
-Response: `200 OK` with updated `Track`.
-
-### DELETE /api/admin/tracks/:id
-Delete a track and its associated audio rows.
-
-Behavior:
-- Removes any `track_audios` entries for the track.
-- Removes the track row.
-- Video objects are deleted via storage helpers when present.
-
-Response: `204 No Content`.
-
----
-
-## User API
-
-Base path: `/api/user/tracks`
-
-### GET /api/user/tracks
-List published tracks with pagination and optional search.
-
-Query params:
-- `page` number (default 0)
-- `limit` number (default 20, max 100)
-- `q` string (optional)
-
-Response:
-```
-{
-  "items": [
-    {
-      "track_id": "uuid",
-      "title": "string",
-      "duration": number,
-      "created_at": "ISO",
-      "hls": {
-        "master": "https://.../hls/track_<id>/master.m3u8",
-        "variants": [ { "bitrate": 96, "url": "https://.../v96/index.m3u8" }, { "bitrate": 160, "url": "https://.../v160/index.m3u8" }, { "bitrate": 320, "url": "https://.../v320/index.m3u8" } ]
-      },
-      "artists": [ { "artist_id": "uuid", "name": "string", "avatar_url": "string|null" } ]
-    }
-  ],
-  "total": number,
-  "page": number,
-  "limit": number
-}
-```
-
-### GET /api/user/tracks/:id
-Fetch a single published track, including available audio variants.
-
-Response:
-```
-{
-  "track_id": "uuid",
-  "title": "string",
-  "album_id": "uuid",
-  "duration": number,
-  "play_count": number,
-  "is_explicit": boolean,
-  "likes_count": number,
-  "created_at": "ISO",
   "hls": {
     "master": "https://.../hls/track_<id>/master.m3u8",
-    "variants": [ { "bitrate": 96, "url": "https://.../v96/index.m3u8" }, { "bitrate": 160, "url": "https://.../v160/index.m3u8" }, { "bitrate": 320, "url": "https://.../v320/index.m3u8" } ]
+    "variants": [{ "bitrate": 96, "url": "..." }]
   },
-  "artists": [ { "artist_id": "uuid", "name": "string", "avatar_url": "string|null" } ],
-  "audios": [ { "ext": "mp3|ogg", "bitrate": number, "path": "string" } ]
+  "artists": [{ "artist_id": "uuid", "role": "owner|editor|viewer", "name": "string", "avatar_url": "string|null" }],
+  "audios": [{ "id": "uuid", "ext": "mp3|ogg", "bitrate": 320, "path": "https://...", "created_at": "ISO" }]
 }
 ```
 
-### HLS streaming for a track
+## Admin endpoints
 
-There are two ways to stream HLS:
+### `GET /api/admin/tracks`
+- Query: `page`, `limit`, `q`
+- Response: `{ items, total, page, limit }`
 
-1) Public container (simplest): clients use the public blob URLs returned in `hls.master` and `hls.variants`, no auth headers required.
+### `GET /api/admin/tracks/:id`
+- Response: full track object
 
-2) Private container (secure): use API endpoints that rewrite playlists to SAS-signed URLs and require Authorization.
-
-Endpoints (secure mode):
-- `GET /api/user/tracks/:id/hls/master.m3u8` — returns a rewritten master playlist (Content-Type: application/vnd.apple.mpegurl)
-- `GET /api/user/tracks/:id/hls/v:bitrate/index.m3u8` — returns a rewritten variant playlist with signed segment URIs
-
-Notes:
-- Public mode: play `hls.master` directly; for manual quality selection, use `hls.variants[*].url`.
-- Private mode: include `Authorization: Bearer <JWT>` when calling API endpoints. The playlists embed time-limited SAS URLs; refresh by re-fetching master if they expire during playback.
-- See “Adaptive Streaming (HLS)” guide: `docs/streaming-hls.md`.
-
-### POST /api/user/tracks
-Create a new track (authenticated user). Caller must be album owner for the specified `album_id`.
-
+### `POST /api/admin/tracks`
 - Content-Type: `multipart/form-data`
-- Body (fields):
-  - `title` string (required)
-  - `album_id` uuid (required)
-  - `duration` integer >= 0 (required)
-  - `lyrics_url` string (optional)
-  - `is_explicit` boolean (optional)
+- Required fields: `title`, `album_id`, `duration`
+- Optional fields: `subtitle`, `track_number`, `disc_number`, `language_code`, `lyrics_url`, `lyrics_snippet`, `is_explicit`, `copyright_text`, `label_id`, `hls_master_path`, `is_published`
 - Files: `audio` (required), `video` (optional)
+- Behavior:
+  - Creates track with `is_published=false`
+  - Processes audio and stores rows in `track_assets` as `audio_progressive`
+  - Auto-links album owners in `track_artists`
+  - Sets `is_published=true` when audio processing succeeds
 
-Behavior:
-- Creates with `is_published=false`.
-- `album_id` and `audio` are required. The request fails with HTTP 400 if missing.
-- On success, audio variants are generated into `track_audios` and `is_published=true` is set.
- - Owners of the album are automatically linked to the track with role `owner`.
-
-Response: `201 Created` with `Track`.
-
-### PATCH /api/tracks/:id
-Update a track you are allowed to manage.
-
+### `PATCH /api/admin/tracks/:id`
 - Content-Type: `multipart/form-data`
-- Body (any of): `title`, `album_id`, `duration`, `lyrics_url`, `is_explicit`, `is_published`
-- Files (optional): `audio`, `video`
+- Any writable fields from create
+- `audio` replaces prior `audio_progressive` variants in `track_assets`
 
-Behavior:
-- Updates provided fields.
-- If `audio` is provided, replaces `track_audios` entries and sets `is_published=true`.
+### `DELETE /api/admin/tracks/:id`
+- Deletes track and dependent rows (`track_assets`, `track_artists`, etc. via FK)
 
-Response: `200 OK` with updated `Track`.
+### Track artist management
+- `POST /api/admin/tracks/:id/artists` with `{ artist_id, role }`
+- `PATCH /api/admin/tracks/:id/artists/:artistId` with `{ role }`
+- `DELETE /api/admin/tracks/:id/artists/:artistId`
 
-### DELETE /api/tracks/:id
-Delete a track you are allowed to manage.
+## User endpoints
 
- Behavior:
- - Removes `track_audios` rows; video is removed via storage helpers if present.
-- Deletes the track row.
+### `GET /api/user/tracks`
+- Lists published tracks only
+- Query: `page`, `limit`, `q`
 
-Response: `204 No Content`.
+### `GET /api/user/tracks/:id`
+- Returns one published track
 
----
+### `POST /api/user/tracks`
+- Auth required
+- Only album owners can create
+- Same media handling as admin
 
-## Notes and edge cases
-- If audio processing fails, the API returns `500` with `{ error: 'Audio processing failed', track: <partial> }` for creates or `{ error: 'Audio processing failed', track_id: <id> }` for updates. The track may still be created/updated without audio variants.
-- Source audio bitrate determines generated variants: mp3 at source bitrate, ogg at 96/160/320kbps up to source bitrate.
-- Clients can either:
-  - Use HLS for adaptive playback (`hls.master`) — recommended.
-  - Or pick a specific quality with `hls.variants` or `audios` (progressive).
-- Ensure `album_id` is valid and the requesting user has permission to manage the album/track (enforced by middleware).
+### `PATCH /api/user/tracks/:id`
+- Auth required
+- Only album owners can update
+
+### `DELETE /api/user/tracks/:id`
+- Auth required
+- Only album owners can delete
+
+### Track artist management (owner only)
+- `POST /api/user/tracks/:id/artists`
+- `PATCH /api/user/tracks/:id/artists/:artistId`
+- `DELETE /api/user/tracks/:id/artists/:artistId`
+
+## Notes
+
+- Old `track_audios` references were migrated to `track_assets`.
+- Provider-specific metadata should be written to `track_external_refs`, not `tracks`.

@@ -7,7 +7,7 @@ const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../.
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can update about themselves
-    const allowed = new Set(['title', 'description', 'genres', 'is_published']);
+    const allowed = new Set(['title', 'subtitle', 'description', 'release_date', 'release_year', 'language_code', 'label_id', 'copyright_text', 'is_published']);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];

@@ -59,7 +59,7 @@ async function addTrack(req, res) {
     const { id } = req.params; // playlist_id
     const { track_id } = req.body;
     if (!track_id) return res.status(400).json({ error: 'track_id is required' });
-    await addPlaylistTrack(id, track_id);
+    await addPlaylistTrack(id, track_id, req.user?.id || null);
     const updated = await getPlaylist(id);
     res.status(200).json(updated);
 }

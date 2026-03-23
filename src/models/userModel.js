@@ -30,14 +30,6 @@ function sanitizeUserInsert(payload = {}) {
     if (payload.avatar_url !== undefined) {
         out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png';
     }
-    if (payload.playlists !== undefined) {
-        if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
-        out.playlists = payload.playlists.map(String);
-    }
-    if (payload.favorites !== undefined) {
-        if (!(payload.favorites && typeof payload.favorites === 'object')) throw new Error('favorites must be an object');
-        out.favorites = payload.favorites;
-    }
     if (payload.followers_count !== undefined) {
         const followers_count = toNum(payload.followers_count);
         if (followers_count === null) throw new Error('followers_count must be a valid number');
@@ -88,14 +80,6 @@ function sanitizeUserUpdate(payload = {}) {
     }
     if (payload.avatar_url !== undefined) {
         out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png';
-    }
-    if (payload.playlists !== undefined) {
-        if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
-        out.playlists = payload.playlists.map(String);
-    }
-    if (payload.favorites !== undefined) {
-        if (!(payload.favorites && typeof payload.favorites === 'object')) throw new Error('favorites must be an object');
-        out.favorites = payload.favorites;
     }
     if (payload.followers_count !== undefined) {
         const followers_count = toNum(payload.followers_count);
@@ -193,7 +177,7 @@ async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
 
 async function getUserPublic(user_id) {
     // followings_count column per schema
-    const { data, error } = await client().from(table).select('user_id, name, followers_count, followings_count, avatar_url, playlists').eq('user_id', user_id).maybeSingle();
+    const { data, error } = await client().from(table).select('user_id, name, followers_count, followings_count, avatar_url').eq('user_id', user_id).maybeSingle();
     if (error) throw error;
     return data;
 }

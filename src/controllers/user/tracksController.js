@@ -8,7 +8,11 @@ const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../.
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on tracks
-    const allowed = new Set(['title', 'album_id', 'duration', 'lyrics_url', 'is_explicit', 'is_published']);
+    const allowed = new Set([
+        'title', 'subtitle', 'album_id', 'track_number', 'disc_number',
+        'duration', 'language_code', 'lyrics_url', 'lyrics_snippet',
+        'is_explicit', 'is_published', 'copyright_text', 'label_id', 'hls_master_path'
+    ]);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];
