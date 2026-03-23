@@ -1,10 +1,40 @@
 const { supabase, supabaseAdmin } = require('../db/config');
-const { toNum, toDateOnly } = require('../utils/typeConversions');
+const { toNum, toDateOnly, toTextArray } = require('../utils/typeConversions');
 const { isUUID } = require('../utils/validators');
 const table = 'artists';
 
 function client() {
     return supabaseAdmin || supabase;
+}
+
+function toBoolean(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'string') {
+        const t = v.trim().toLowerCase();
+        if (t === 'true' || t === '1') return true;
+        if (t === 'false' || t === '0') return false;
+    }
+    return Boolean(v);
+}
+
+function normalizeGenres(val) {
+    if (val === undefined) return undefined;
+    if (Array.isArray(val)) return val.map(String);
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (!trimmed) return [];
+        if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (!Array.isArray(parsed)) throw new Error('genres must be an array');
+                return parsed.map(String);
+            } catch {
+                throw new Error('genres must be an array');
+            }
+        }
+        return toTextArray(trimmed);
+    }
+    throw new Error('genres must be an array');
 }
 
 function sanitizeArtistInsert(payload = {}) {
@@ -19,10 +49,7 @@ function sanitizeArtistInsert(payload = {}) {
 
     out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png';
 
-    if (payload.genres !== undefined) {
-        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
-        out.genres = payload.genres.map(String);
-    }
+    if (payload.genres !== undefined) out.genres = normalizeGenres(payload.genres);
 
     // debut_year is optional; validate if provided
     if (payload.debut_year !== undefined) {
@@ -32,7 +59,7 @@ function sanitizeArtistInsert(payload = {}) {
         out.debut_year = debut_year;
     }
 
-    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
+    if (payload.is_verified !== undefined) out.is_verified = toBoolean(payload.is_verified);
 
     if (payload.monthly_listeners !== undefined) {
         out.monthly_listeners = toNum(payload.monthly_listeners, null);
@@ -64,10 +91,7 @@ function sanitizeArtistUpdate(payload = {}) {
     if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : null;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
-    if (payload.genres !== undefined) {
-        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
-        out.genres = payload.genres.map(String);
-    }
+    if (payload.genres !== undefined) out.genres = normalizeGenres(payload.genres);
 
     if (payload.debut_year !== undefined) {
         const debut_year = toNum(payload.debut_year, null);
@@ -75,7 +99,7 @@ function sanitizeArtistUpdate(payload = {}) {
         out.debut_year = debut_year;
     }
 
-    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
+    if (payload.is_verified !== undefined) out.is_verified = toBoolean(payload.is_verified);
 
     if (payload.monthly_listeners !== undefined) {
         out.monthly_listeners = toNum(payload.monthly_listeners, null);

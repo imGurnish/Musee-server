@@ -149,6 +149,14 @@ async function getUser(user_id) {
     return data;
 }
 
+async function getUserByEmail(email) {
+    const normalized = typeof email === 'string' ? email.trim() : '';
+    if (!normalized) return null;
+    const { data, error } = await client().from(table).select('*').eq('email', normalized).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
 async function createUser(payload) {
     const input = sanitizeUserInsert(payload);
     const { data, error } = await client().from(table).insert(input).select('*').single();
@@ -190,4 +198,4 @@ async function getUserPublic(user_id) {
     return data;
 }
 
-module.exports = { listUsers, listUsersPublic, getUser, getUserPublic, createUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };
+module.exports = { listUsers, listUsersPublic, getUser, getUserByEmail, getUserPublic, createUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };

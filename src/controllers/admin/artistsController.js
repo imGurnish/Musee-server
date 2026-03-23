@@ -1,10 +1,18 @@
 const createError = require('http-errors');
 const { listArtists, getArtist, createArtist, updateArtist, deleteArtist, sanitizeArtistInsert } = require('../../models/artistModel');
-const { createUser, updateUser, sanitizeUserInsert } = require('../../models/userModel');
-const { uploadUserAvatarToStorage, uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
+const { updateUser, sanitizeUserInsert, getUserByEmail } = require('../../models/userModel');
+const { uploadUserAvatarToStorage, uploadArtistCoverToStorage, deleteArtistCoverFromStorage } = require('../../utils/supabaseStorage');
 const { createAuthUser } = require('../../models/authUserModel');
 const { listTracksByArtist } = require('../../models/trackModel');
 const { listAlbumsByArtist } = require('../../models/albumModel');
+
+function isEmailExistsError(error) {
+    return error?.code === 'email_exists' || error?.status === 422;
+}
+
+function isDuplicateArtistError(error) {
+    return error?.code === '23505' || /duplicate key|already exists|unique/i.test(String(error?.message || ''));
+}
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -25,27 +33,57 @@ async function getOne(req, res) {
 async function create(req, res) {
     // Sanitize inputs BEFORE any DB operations
     const body = { ...req.body };
-    const artist_id = req.body.artist_id;
+    let artist_id = req.body.artist_id;
+    const avatarFile = req.files?.avatar?.[0];
+
     if (!artist_id) {
         const userInput = sanitizeUserInsert(body);
-        //Create user
-        const authUser = await createAuthUser(userInput.name, userInput.email, userInput.password);
-        const user = await updateUser(authUser.id, userInput);
+        let user = null;
+        try {
+            const authUser = await createAuthUser(userInput.name, userInput.email, userInput.password);
+            user = await updateUser(authUser.id, { ...userInput, user_type: 'artist' });
+        } catch (err) {
+            if (!isEmailExistsError(err)) throw err;
+            const existingUser = await getUserByEmail(userInput.email);
+            if (!existingUser?.user_id) {
+                throw createError(422, 'A user with this email address has already been registered');
+            }
+            user = await updateUser(existingUser.user_id, { name: userInput.name, user_type: 'artist' });
+        }
+
+        artist_id = user.user_id;
         // 1a) If avatar file provided, upload and set on user
-        const avatarFile = req.files?.avatar?.[0];
         if (avatarFile) {
-            const avatarUrl = await uploadUserAvatarToStorage(user.user_id, avatarFile);
+            const avatarUrl = await uploadUserAvatarToStorage(artist_id, avatarFile);
             if (avatarUrl) {
-                try { await updateUser(user.user_id, { avatar_url: avatarUrl }); } catch { }
+                try { await updateUser(artist_id, { avatar_url: avatarUrl }); } catch { }
             }
         }
-        body.artist_id = user.user_id;
+        body.artist_id = artist_id;
+    } else {
+        try { await updateUser(artist_id, { user_type: 'artist' }); } catch { }
+        if (avatarFile) {
+            const avatarUrl = await uploadUserAvatarToStorage(artist_id, avatarFile);
+            if (avatarUrl) {
+                try { await updateUser(artist_id, { avatar_url: avatarUrl }); } catch { }
+            }
+        }
     }
     console.log("Creating artist with data:", body);
     const artistInput = sanitizeArtistInsert(body);
 
     // Create artist with the new user id
-    const artist = await createArtist({ ...artistInput });
+    let artist;
+    let created = true;
+    try {
+        artist = await createArtist({ ...artistInput });
+    } catch (err) {
+        if (!isDuplicateArtistError(err)) throw err;
+        const existing = await getArtist(artistInput.artist_id);
+        if (!existing) throw err;
+        artist = existing;
+        created = false;
+    }
 
     // Upload cover if provided and update
     const coverFile = req.files?.cover?.[0] || req.file;
@@ -53,11 +91,11 @@ async function create(req, res) {
         const coverUrl = await uploadArtistCoverToStorage(artist.artist_id, coverFile);
         if (coverUrl) {
             const updated = await updateArtist(artist.artist_id, { cover_url: coverUrl });
-            return res.status(201).json(updated);
+            return res.status(created ? 201 : 200).json(updated);
         }
     }
 
-    return res.status(201).json(artist);
+    return res.status(created ? 201 : 200).json(artist);
 }
 
 async function update(req, res) {

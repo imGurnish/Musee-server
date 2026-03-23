@@ -8,6 +8,7 @@ Key points:
 - Artists linked to a track are exposed via `artists` array on responses (sourced from `track_artists`).
 - Tracks do not have a cover image; use the album's `cover_url`.
 - HLS: responses include a `hls` object with a public `master` m3u8 URL and per-quality variant m3u8 URLs when the HLS container is public.
+- External import metadata from JioSaavn can be stored on `tracks` (see SQL migration: `docs/sql/2026-03-23-add-jiosaavn-track-columns.sql`).
 
 ## Common object shape
 
@@ -28,6 +29,19 @@ Track object (admin responses include more fields; user list is a smaller projec
   "updated_at": "ISO",
   "video_url": "string|null",
   "is_published": true|false,
+  "ext_track_id": "string|null",
+  "source": "string|null",        // e.g. "jiosaavn"
+  "language": "string|null",
+  "release_date": "YYYY-MM-DD|null",
+  "music": "string|null",
+  "primary_artists": "string|null",
+  "featured_artists": "string|null",
+  "singers": "string|null",
+  "label": "string|null",
+  "perma_url": "string|null",
+  "media_preview_url": "string|null",
+  "rights": { ... } | null,
+  "artist_map": { ... } | null,
   "hls": {                     // public HLS URLs (container must be public)
     "master": "https://<account>.blob.core.windows.net/<container>/hls/track_<id>/master.m3u8",
     "variants": [
@@ -46,6 +60,21 @@ Track object (admin responses include more fields; user list is a smaller projec
   ]
 }
 ```
+
+### JioSaavn payload mapping notes
+
+When importing JioSaavn tracks, these fields map directly to existing schema:
+- `song` -> `tracks.title`
+- `duration` -> `tracks.duration`
+- `play_count` -> `tracks.play_count`
+- `explicit_content` -> `tracks.is_explicit`
+
+These payload fields are newly supported as metadata columns on `tracks`:
+- `id`, `type`, `year`, `music`, `music_id`, `primary_artists`, `primary_artists_id`, `featured_artists`, `featured_artists_id`, `singers`, `starring`, `label`, `label_id`, `label_url`, `language`, `origin`, `is_drm`, `320kbps`, `is_dolby_content`, `has_lyrics`, `lyrics_snippet`, `copyright_text`, `encrypted_drm_media_url`, `encrypted_media_url`, `encrypted_media_path`, `media_preview_url`, `perma_url`, `album_url`, `rights`, `artistMap`, `release_date`, `vcode`, `vlink`, `triller_available`, `webp`, `cache_state`, `starred`.
+
+Recommended migration path:
+1. Run `docs/sql/2026-03-23-add-jiosaavn-track-columns.sql`.
+2. If needed, backfill new fields from your existing import payload cache.
 
 Files supported on create/update (multipart/form-data):
 - `audio` (binary) — triggers audio processing and sets `is_published=true` upon success

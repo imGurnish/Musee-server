@@ -6,6 +6,7 @@ const genders = new Set(['Male', 'Female', 'Other', 'Prefer not to say']);
 const billingCycles = new Set(['monthly', 'yearly', 'lifetime']);
 const artistRoles = new Set(['owner', 'editor', 'viewer']);
 const audioExts = new Set(['mp3', 'ogg']);
+const languages = new Set(["English", "Hindi","Punjabi", "Bengali", "Tamil", "Telugu", "Marathi", "Gujarati", "Urdu", "Malayalam", "Kannada", "Oriya", "Assamese", "Maithili", "Bhojpuri", "Rajasthani", "Haryanvi", "Chhattisgarhi", "Magahi", "Santali", "Kashmiri", "Nepali"]);
 
 function isNonEmptyString(v){
     return typeof v === 'string' && v.trim() != '';
@@ -39,6 +40,10 @@ function validateAudioExts(v) {
     return audioExts.has(v);
 }
 
+function validateLanguage(v) {
+    return languages.has(v);
+}
+
 module.exports = {
     isUUID,
     isNonEmptyString,
@@ -48,4 +53,5 @@ module.exports = {
     validateBillingCycle,
     validateArtistRoles,
     validateAudioExts,
+    validateLanguage
 };
