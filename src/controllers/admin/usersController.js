@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listUsers, getUser, createUser, updateUser, deleteUser, sanitizeUserInsert } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
 const { createAuthUser, deleteAuthUser } = require('../../models/authUserModel');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -14,6 +15,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
     const item = await getUser(id);
     if (!item) throw createError(404, 'User not found');
     res.json(item);
@@ -45,6 +47,9 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
+    const existing = await getUser(id);
+    if (!existing) throw createError(404, 'User not found');
     const payload = { ...req.body };
     if (req.file) {
         const avatarPath = await uploadUserAvatarToStorage(id, req.file);
@@ -56,6 +61,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
     const user = await getUser(id);
     if (!user) {
         return res.status(404).json({ message: 'User not found' });

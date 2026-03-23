@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listCountriesUser, getCountryUser } = require('../../models/countryModel');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -12,6 +13,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid country id');
     const item = await getCountryUser(id);
     if (!item) throw createError(404, 'Country not found');
     res.json(item);

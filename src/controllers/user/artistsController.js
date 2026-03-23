@@ -11,6 +11,7 @@ const { listTracksByArtistUser } = require('../../models/trackModel');
 const { listAlbumsByArtistUser } = require('../../models/albumModel');
 const { updateUser } = require('../../models/userModel');
 const { uploadArtistCoverToStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can update about themselves
@@ -36,6 +37,7 @@ async function list(req, res) {
 // GET /api/user/artists/:id
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const item = await getArtistUser(id);
     if (!item) throw createError(404, 'Artist not found');
     res.json(item);
@@ -76,6 +78,7 @@ async function create(req, res) {
 async function update(req, res) {
     const userId = req.user?.id;
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     if (!userId) throw createError(401, 'Unauthorized');
     if (id !== userId) throw createError(403, 'Forbidden');
 
@@ -92,6 +95,7 @@ async function update(req, res) {
 async function remove(req, res) {
     const userId = req.user?.id;
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     if (!userId) throw createError(401, 'Unauthorized');
     if (id !== userId) throw createError(403, 'Forbidden');
 
@@ -104,6 +108,7 @@ module.exports = { list, getOne, create, update, remove };
 // GET /api/user/artists/:id/tracks
 async function listTracks(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
@@ -115,6 +120,7 @@ async function listTracks(req, res) {
 // GET /api/user/artists/:id/albums
 async function listAlbums(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;

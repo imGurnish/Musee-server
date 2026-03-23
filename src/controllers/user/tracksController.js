@@ -5,6 +5,7 @@ const { getAlbum } = require('../../models/albumModel');
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on tracks
@@ -39,6 +40,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const item = await getTrackUser(id);
     if (!item) throw createError(404, 'Track not found');
     res.json(item);
@@ -112,6 +114,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const body = filterAllowedFields({ ...req.body });
 
     var result;
@@ -160,6 +163,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     // authorization: only album owners can delete tracks under that album
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });

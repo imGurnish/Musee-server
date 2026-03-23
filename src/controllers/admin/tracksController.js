@@ -8,6 +8,7 @@ const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudio
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { getAlbum } = require('../../models/albumModel');
 const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function getFileFromReq(req, field) {
     if (!req.files) return null;
@@ -27,6 +28,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const item = await getTrack(id);
     if (!item) throw createError(404, 'Track not found');
     res.json(item);
@@ -118,6 +120,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const body = { ...req.body };
 
     var result;
@@ -160,6 +163,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const track = await getTrack(id);
     if (!track) throw createError(404, 'Track not found');
     await deleteTrackVideoFromStorage(track.track_id, track.video_url)

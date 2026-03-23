@@ -28,6 +28,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const item = await getAlbumUser(id);
     if (!item) throw createError(404, 'Album not found');
     res.json(item);
@@ -58,6 +59,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const payload = filterAllowedFields({ ...req.body });
 
     const album = await getAlbum(id);
@@ -77,6 +79,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
 
     const album = await getAlbum(id);
     if (!album) throw createError(404, 'Album not found');
@@ -104,6 +107,7 @@ async function ensureOwner(req, albumId) {
 async function addArtist(req, res) {
     const { id: album_id } = req.params;
     const { artist_id, role = 'viewer' } = req.body || {};
+    if (!isUUID(album_id)) throw createError(400, 'invalid album_id');
     await ensureOwner(req, album_id);
     if (!isUUID(artist_id)) throw createError(400, 'invalid artist_id');
     if (!validateArtistRoles(role)) throw createError(400, 'invalid role');
@@ -114,6 +118,7 @@ async function addArtist(req, res) {
 async function updateArtist(req, res) {
     const { id: album_id, artistId } = req.params;
     const { role } = req.body || {};
+    if (!isUUID(album_id)) throw createError(400, 'invalid album_id');
     await ensureOwner(req, album_id);
     if (!isUUID(artistId)) throw createError(400, 'invalid artist_id');
     if (!validateArtistRoles(role)) throw createError(400, 'invalid role');
@@ -124,6 +129,7 @@ async function updateArtist(req, res) {
 
 async function removeArtist(req, res) {
     const { id: album_id, artistId } = req.params;
+    if (!isUUID(album_id)) throw createError(400, 'invalid album_id');
     await ensureOwner(req, album_id);
     if (!isUUID(artistId)) throw createError(400, 'invalid artist_id');
     const removed = await deleteAlbumArtistByPair(album_id, artistId);

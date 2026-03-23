@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum } = require('../../models/albumModel');
 const { createAlbumArtist, updateAlbumArtistByPair, deleteAlbumArtistByPair } = require('../../models/albumArtistsModel');
 const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID, validateArtistRoles } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -14,6 +15,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const item = await getAlbum(id);
     if (!item) throw createError(404, 'Album not found');
     res.json(item);
@@ -42,8 +44,6 @@ async function create(req, res) {
 }
 
 // Manage album artists (admin)
-const { isUUID, validateArtistRoles } = require('../../utils/validators');
-
 async function addArtist(req, res) {
     const { id: album_id } = req.params;
     const { artist_id, role = 'viewer' } = req.body || {};
@@ -75,6 +75,7 @@ async function removeArtist(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const payload = { ...req.body };
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(id, req.file);
@@ -86,6 +87,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const album = await getAlbum(id);
     if (!album) {
         return res.status(404).json({ message: 'Album not found' });

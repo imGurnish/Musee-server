@@ -83,7 +83,17 @@ app.use((req, res, next) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-    const status = err.status || 500;
+    let status = err.status || 500;
+    const code = err.code || err?.cause?.code;
+
+    if (!err.status) {
+        if (code === '22P02') status = 400;
+        else if (code === '23505') status = 409;
+        else if (code === '23503') status = 409;
+        else if (code === 'PGRST116') status = 404;
+        else if (/required|invalid|must be|cannot be|format is invalid|forbidden|unauthorized/i.test(err.message || '')) status = 400;
+    }
+
     const message = err.message || 'Internal Server Error';
     if (process.env.NODE_ENV !== 'production') {
         console.error(err);

@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist, listPlaylistsUser, getPlaylistUser } = require('../../models/playlistModel');
 const { addPlaylistTrack, removePlaylistTrack } = require('../../models/playlistTracksModel');
 const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on playlists
@@ -25,6 +26,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     const item = await getPlaylistUser(id);
     if (!item) throw createError(404, 'Playlist not found');
     res.json(item);
@@ -47,6 +49,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     // ownership check
     const existing = await getPlaylist(id);
     if (!existing) throw createError(404, 'Playlist not found');
@@ -62,6 +65,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     const playlist = await getPlaylist(id);
     if (!playlist) throw createError(404, 'Playlist not found');
     if (playlist.creator_id && req.user && playlist.creator_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
@@ -74,6 +78,8 @@ async function remove(req, res) {
 async function addTrack(req, res) {
     const { id } = req.params; // playlist_id
     const { track_id } = req.body;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
+    if (!isUUID(track_id)) throw createError(400, 'invalid track id');
     const playlist = await getPlaylist(id);
     if (!playlist) throw createError(404, 'Playlist not found');
     if (playlist.creator_id && req.user && playlist.creator_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
@@ -86,6 +92,8 @@ async function addTrack(req, res) {
 // Remove a track from a playlist (owner only)
 async function removeTrack(req, res) {
     const { id, trackId } = req.params; // playlist_id, trackId
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
+    if (!isUUID(trackId)) throw createError(400, 'invalid track id');
     const playlist = await getPlaylist(id);
     if (!playlist) throw createError(404, 'Playlist not found');
     if (playlist.creator_id && req.user && playlist.creator_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });

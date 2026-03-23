@@ -1,6 +1,7 @@
 const createError = require('http-errors');
 const { listUsersPublic, getUserPublic, getUser, updateUser, deleteUser } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can update about themselves
@@ -24,6 +25,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
     const item = await getUserPublic(id);
     if (!item) throw createError(404, 'User not found');
     res.json(item);
@@ -36,12 +38,16 @@ async function getMe(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
     // Only allow a user to update their own record
     if (!req.user || req.user.id !== id) {
         return res.status(403).json({ message: 'Forbidden' });
     }
 
     const body = filterAllowedFields({ ...req.body });
+
+    const existing = await getUser(id);
+    if (!existing) throw createError(404, 'User not found');
 
     const item = await updateUser(id, body);
 
@@ -57,6 +63,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid user id');
     if (!req.user || req.user.id !== id) {
         return res.status(403).json({ message: 'Forbidden' });
     }

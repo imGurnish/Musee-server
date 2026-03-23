@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist } = require('../../models/playlistModel');
 const { addPlaylistTrack, removePlaylistTrack } = require('../../models/playlistTracksModel');
 const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -14,6 +15,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     const item = await getPlaylist(id);
     if (!item) throw createError(404, 'Playlist not found');
     res.json(item);
@@ -34,6 +36,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     const payload = { ...req.body };
     if (req.file) {
         const coverUrl = await uploadPlaylistCoverToStorage(id, req.file);
@@ -45,6 +48,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
     const playlist = await getPlaylist(id);
     if (!playlist) throw createError(404, 'Playlist not found');
     await deletePlaylistCoverFromStorage(playlist.playlist_id, playlist.cover_url);
@@ -58,6 +62,8 @@ module.exports = { list, getOne, create, update, remove };
 async function addTrack(req, res) {
     const { id } = req.params; // playlist_id
     const { track_id } = req.body;
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
+    if (!isUUID(track_id)) throw createError(400, 'invalid track id');
     if (!track_id) return res.status(400).json({ error: 'track_id is required' });
     await addPlaylistTrack(id, track_id, req.user?.id || null);
     const updated = await getPlaylist(id);
@@ -67,6 +73,8 @@ async function addTrack(req, res) {
 // Remove a track from a playlist (admin)
 async function removeTrack(req, res) {
     const { id, trackId } = req.params; // playlist_id and trackId
+    if (!isUUID(id)) throw createError(400, 'invalid playlist id');
+    if (!isUUID(trackId)) throw createError(400, 'invalid track id');
     await removePlaylistTrack(id, trackId);
     res.status(204).send();
 }

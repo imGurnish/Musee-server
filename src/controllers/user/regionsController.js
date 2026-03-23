@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listRegionsUser, getRegionUser } = require('../../models/regionModel');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -13,6 +14,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid region id');
     const item = await getRegionUser(id);
     if (!item) throw createError(404, 'Region not found');
     res.json(item);

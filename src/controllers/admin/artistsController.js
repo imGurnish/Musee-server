@@ -5,6 +5,7 @@ const { uploadUserAvatarToStorage, uploadArtistCoverToStorage, deleteArtistCover
 const { createAuthUser } = require('../../models/authUserModel');
 const { listTracksByArtist } = require('../../models/trackModel');
 const { listAlbumsByArtist } = require('../../models/albumModel');
+const { isUUID } = require('../../utils/validators');
 
 function isEmailExistsError(error) {
     return error?.code === 'email_exists' || error?.status === 422;
@@ -25,6 +26,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const item = await getArtist(id);
     if (!item) throw createError(404, 'Artist not found');
     res.json(item);
@@ -100,6 +102,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const payload = { ...req.body };
     if (req.file) {
         const coverUrl = await uploadArtistCoverToStorage(id, req.file);
@@ -111,6 +114,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const artist = await getArtist(id);
     if (!artist) {
         return res.status(404).json({ message: 'Artist not found' });
@@ -125,6 +129,7 @@ module.exports = { list, getOne, create, update, remove };
 // GET /api/admin/artists/:id/tracks
 async function listTracks(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
@@ -136,6 +141,7 @@ async function listTracks(req, res) {
 // GET /api/admin/artists/:id/albums
 async function listAlbums(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
