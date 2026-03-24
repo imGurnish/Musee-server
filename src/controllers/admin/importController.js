@@ -68,6 +68,63 @@ function languageNameFromCodeOrInput(code, input) {
   return 'Unknown';
 }
 
+function normalizeForNameMatch(value) {
+  if (typeof value !== 'string') return '';
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isDefaultAvatarUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return true;
+  return url.includes('default_avatar.png');
+}
+
+async function resolveBestArtistImageUrl(artistName, fallbackImageUrl = null) {
+  const fallback = typeof fallbackImageUrl === 'string' && fallbackImageUrl.trim()
+    ? fallbackImageUrl.trim()
+    : null;
+
+  try {
+    const candidates = await jioSaavnClient.searchArtists(artistName, 10);
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return fallback;
+    }
+
+    const normalizedInput = normalizeForNameMatch(artistName);
+    const withImage = candidates.filter(
+      (candidate) => typeof candidate?.image === 'string' && candidate.image.trim().length > 0
+    );
+
+    if (withImage.length === 0) {
+      return fallback;
+    }
+
+    const exact = withImage.find(
+      (candidate) => normalizeForNameMatch(candidate.name) === normalizedInput
+    );
+    if (exact) {
+      return exact.image.trim();
+    }
+
+    const partial = withImage.find((candidate) => {
+      const normalizedCandidate = normalizeForNameMatch(candidate.name);
+      return (
+        normalizedCandidate.includes(normalizedInput) ||
+        normalizedInput.includes(normalizedCandidate)
+      );
+    });
+    if (partial) {
+      return partial.image.trim();
+    }
+
+    return withImage[0].image.trim();
+  } catch (error) {
+    logger.warn(
+      `[ImportService] Could not resolve artist image for "${artistName}": ${error.message}`
+    );
+    return fallback;
+  }
+}
+
 async function ensureLanguageExists(languageCode, languageName) {
   if (!languageCode) return;
   const existing = await supabaseAdmin
@@ -285,6 +342,7 @@ async function importCompleteAlbum(req, res) {
 
         // Step 1: Fetch album details from Jio Saavn
         const jioAlbum = await jioSaavnClient.getAlbum(jioSaavnAlbumId);
+        const artistImageUrl = await resolveBestArtistImageUrl(artistName, jioAlbum.image);
 
         logger.info(`[ImportService] Fetched album: ${jioAlbum.title} with ${jioAlbum.tracks.length} tracks`);
 
@@ -301,6 +359,40 @@ async function importCompleteAlbum(req, res) {
         if (existingArtist.data) {
           logger.debug(`[ImportService] Artist already exists: ${existingArtist.data.id}`);
           artist = existingArtist.data;
+
+          const artistId = artist.artist_id || artist.id;
+          if (artistImageUrl && artistId) {
+            if (!artist.cover_url) {
+              artist = await updateAndTrack(
+                tracker,
+                'artists',
+                { cover_url: artistImageUrl },
+                'artist_id',
+                artistId
+              );
+            }
+
+            const existingUser = await supabaseAdmin
+              .from('users')
+              .select('avatar_url')
+              .eq('user_id', artistId)
+              .maybeSingle();
+
+            if (existingUser.error) {
+              throw existingUser.error;
+            }
+
+            const existingAvatar = existingUser.data?.avatar_url || null;
+            if (isDefaultAvatarUrl(existingAvatar)) {
+              await updateAndTrack(
+                tracker,
+                'users',
+                { avatar_url: artistImageUrl },
+                'user_id',
+                artistId
+              );
+            }
+          }
         } else {
           // Create import user (without auth_user)
           const importUser = await createAndTrack(tracker, 'users', {
@@ -308,6 +400,7 @@ async function importCompleteAlbum(req, res) {
             email: `import_artist_${uuidv4()}@musee.local`,
             user_type: 'artist',
             subscription_type: 'free',
+            avatar_url: artistImageUrl,
             settings: { import_source: 'jio_saavn' }
           }, 'user_id');
 
@@ -321,7 +414,7 @@ async function importCompleteAlbum(req, res) {
               user_id: importUser.user_id,
               name: artistName,
               bio: artistBio,
-              cover_url: jioAlbum.image || 'https://via.placeholder.com/300x300?text=Artist',
+              cover_url: artistImageUrl || 'https://via.placeholder.com/300x300?text=Artist',
               region_id: regionId,
               is_verified: false,
               monthly_listeners: 0,

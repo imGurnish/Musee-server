@@ -150,6 +150,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
         .from(table)
         .select(`
             track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -172,6 +173,10 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
         title: row.title,
         subtitle: row.subtitle,
         album_id: row.album_id,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         track_number: row.track_number,
         disc_number: row.disc_number,
         language_code: row.language_code,
@@ -210,6 +215,7 @@ async function getTrack(track_id) {
         .from(table)
         .select(`
             track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -230,6 +236,10 @@ async function getTrack(track_id) {
         title: data.title,
         subtitle: data.subtitle,
         album_id: data.album_id,
+        album: {
+            title: data.albums?.title,
+            cover_url: data.albums?.cover_url,
+        },
         track_number: data.track_number,
         disc_number: data.disc_number,
         language_code: data.language_code,
@@ -382,6 +392,7 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
         .from(table)
         .select(`
             track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!inner(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -405,6 +416,10 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
         title: row.title,
         subtitle: row.subtitle,
         album_id: row.album_id,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         track_number: row.track_number,
         disc_number: row.disc_number,
         language_code: row.language_code,
@@ -446,7 +461,8 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, duration, created_at,
+            track_id, title, duration, created_at, album_id,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!inner(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
@@ -466,6 +482,10 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
         title: row.title,
         duration: row.duration,
         created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         hls: {
             master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
             variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
