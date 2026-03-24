@@ -184,7 +184,7 @@ async function create(req, res) {
                 imageUrl: body.image || body.cover_url || null,
                 rawPayload: body.external_payload || null,
                 extra: {
-                    external_album_id: body.ext_album_id || body.external_album_id || null,
+                    external_album_id: body.ext_album_id || body.external_album_id || body.album_external_id || null,
                     language: body.language || null,
                     release_date: body.release_date || null,
                     has_lyrics: body.has_lyrics === undefined ? null : !!body.has_lyrics,
@@ -238,7 +238,7 @@ async function create(req, res) {
             imageUrl: body.image || body.cover_url || null,
             rawPayload: body.external_payload || null,
             extra: {
-                external_album_id: body.ext_album_id || body.external_album_id || null,
+                external_album_id: body.ext_album_id || body.external_album_id || body.album_external_id || null,
                 language: body.language || null,
                 release_date: body.release_date || null,
                 has_lyrics: body.has_lyrics === undefined ? null : !!body.has_lyrics,
