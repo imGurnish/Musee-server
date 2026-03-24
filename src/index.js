@@ -76,6 +76,31 @@ try {
     console.warn('User routes not mounted:', e?.message || e);
 }
 
+try {
+    const listeningRoutes = require('./routes/listeningHistoryRoutes');
+    if (typeof listeningRoutes === 'function' || listeningRoutes?.stack) {
+        app.use('/api', listeningRoutes);
+        console.log('Listening routes mounted at /api');
+    } else {
+        console.warn('Listening routes not mounted: export is not a router');
+    }
+} catch (e) {
+    console.warn('Listening routes not mounted:', e?.message || e);
+}
+
+// Hard fallback bindings for critical listening endpoints.
+// These guarantee route availability even if modular router mount is skipped.
+try {
+    const authUser = require('./middleware/authUser');
+    const listeningController = require('./controllers/listeningHistoryController');
+    app.post('/api/listening/log-play', authUser, listeningController.logTrackPlay);
+    app.get('/api/recommendations', authUser, listeningController.getRecommendations);
+    app.get('/api/listening/recommendations', authUser, listeningController.getRecommendations);
+    console.log('Listening fallback routes mounted');
+} catch (e) {
+    console.warn('Listening fallback routes not mounted:', e?.message || e);
+}
+
 // 404 handler
 app.use((req, res, next) => {
     next(createError(404, 'Not Found'));

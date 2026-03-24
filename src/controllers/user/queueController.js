@@ -49,9 +49,7 @@ async function getQueue(req, res) {
   if (!userId) throw createError(401, 'Unauthorized');
   const client = await getRedisClient();
   // Always ensure the queue has at least 10 items while user is listening
-  // const ids = await ensureMinQueue(userId, 10);
-  // DISABLED: Rely on frontend smart fill
-  const ids = await client.lRange(queueKey(userId), 0, -1);
+  const ids = await ensureMinQueue(userId, 10);
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.json({ items: ids, total: ids.length });
 
@@ -204,9 +202,7 @@ async function playTrack(req, res) {
   await client.rPush(key, fullQueue);
 
   // Ensure minimum size in case we couldn't gather 10 unique
-  // const ensured = await ensureMinQueue(userId, 10);
-  // DISABLED: Rely on frontend smart fill
-  const ensured = await client.lRange(key, 0, -1);
+  const ensured = await ensureMinQueue(userId, 10);
 
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.status(201).json({ items: ensured, total: ensured.length });
