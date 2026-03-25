@@ -154,6 +154,21 @@ function asArray(value) {
   return [];
 }
 
+function splitCsv(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry || '').trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value !== 'string') return [];
+
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function toInt(value, fallback = 0) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -191,20 +206,56 @@ async function fetchSaavn(callName, params = {}) {
 }
 
 function firstArtistFromTrack(rawTrack) {
-  const artistMap = rawTrack?.more_info?.artistMap || rawTrack?.artistMap || rawTrack?.artist_map;
-  const candidates = asArray(artistMap?.primary_artists || artistMap?.artists || artistMap);
-  if (candidates.length > 0) {
-    const first = candidates[0] || {};
+  const primaryNames = splitCsv(
+    rawTrack?.primary_artists ||
+    rawTrack?.more_info?.primary_artists ||
+    rawTrack?.singers ||
+    rawTrack?.more_info?.singers
+  );
+  const primaryIds = splitCsv(
+    rawTrack?.primary_artists_id ||
+    rawTrack?.more_info?.primary_artists_id
+  );
+
+  if (primaryNames.length > 0) {
+    return {
+      externalId: primaryIds[0] || null,
+      name: primaryNames[0] || null
+    };
+  }
+
+  const artistMapRaw = parseJsonMaybe(
+    rawTrack?.more_info?.artistMap ||
+    rawTrack?.artistMap ||
+    rawTrack?.artist_map
+  );
+
+  const mappedCandidates = asArray(
+    artistMapRaw?.primary_artists ||
+    artistMapRaw?.artists ||
+    artistMapRaw
+  );
+
+  if (mappedCandidates.length > 0 && typeof mappedCandidates[0] === 'object') {
+    const first = mappedCandidates[0] || {};
     return {
       externalId: String(first.id || first.artistId || '').trim() || null,
       name: safeText(first.name, null)
     };
   }
 
-  const names = safeText(rawTrack?.primary_artists || rawTrack?.singers || rawTrack?.more_info?.singers, '')
-    .split(',')
-    .map((name) => name.trim())
-    .filter(Boolean);
+  if (artistMapRaw && typeof artistMapRaw === 'object' && !Array.isArray(artistMapRaw)) {
+    const entries = Object.entries(artistMapRaw);
+    if (entries.length > 0) {
+      const [name, id] = entries[0];
+      return {
+        externalId: String(id || '').trim() || null,
+        name: safeText(name, null)
+      };
+    }
+  }
+
+  const names = splitCsv(rawTrack?.primary_artists || rawTrack?.singers || rawTrack?.more_info?.singers);
 
   return {
     externalId: null,
@@ -529,7 +580,12 @@ async function ensureAlbumImportedShell(albumExternalId, options = {}) {
   const { data: remoteAlbum } = await fetchSaavn('content.getAlbumDetails', { albumid: albumExternalId });
   const normalized = normalizeAlbumPayload(remoteAlbum, albumExternalId);
 
-  const artistImport = await ensureArtistImported(normalized.artistExternalId, normalized.artistName, options);
+  const resolvedArtistExternalId = normalized.artistExternalId || options.preferredArtistExternalId || null;
+  const resolvedArtistName = normalized.artistName || options.preferredArtistName || null;
+
+  const artistImport = options.preferredArtistId
+    ? { artistId: options.preferredArtistId, created: false }
+    : await ensureArtistImported(resolvedArtistExternalId, resolvedArtistName, options);
 
   const tx = await executeTransaction(async (tracker) => {
     const languageCode = normalizeLanguageCode(normalized.language);
@@ -696,7 +752,12 @@ async function importTrackById(trackId, options = {}) {
   let albumId = options.forcedAlbumId || null;
   if (!albumId) {
     if (normalized.albumId) {
-      const albumImport = await ensureAlbumImportedShell(normalized.albumId, options);
+      const albumImport = await ensureAlbumImportedShell(normalized.albumId, {
+        ...options,
+        preferredArtistId: artistImport.artistId,
+        preferredArtistExternalId: normalized.artistExternalId,
+        preferredArtistName: normalized.artistName
+      });
       albumId = albumImport.albumId;
     } else {
       const fallbackAlbumTx = await executeTransaction(async (tracker) => {
