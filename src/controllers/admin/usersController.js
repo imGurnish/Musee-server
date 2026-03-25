@@ -10,7 +10,12 @@ const {
     getUsersByIds,
     deleteUsers,
 } = require('../../models/userModel');
-const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
+const { getArtistsByIds } = require('../../models/artistModel');
+const {
+    uploadUserAvatarToStorage,
+    deleteUserAvatarFromStorage,
+    deleteArtistCoverFromStorage,
+} = require('../../utils/supabaseStorage');
 const { deleteAuthUser } = require('../../models/authUserModel');
 const { isUUID } = require('../../utils/validators');
 
@@ -76,6 +81,13 @@ async function remove(req, res) {
         return res.status(404).json({ message: 'User not found' });
     }
     await deleteUserAvatarFromStorage(id, user.avatar_url);
+    if (user.user_type === 'artist') {
+        const artists = await getArtistsByIds([id]);
+        const artist = artists[0];
+        if (artist) {
+            await deleteArtistCoverFromStorage(artist.artist_id, artist.cover_url);
+        }
+    }
 
     // Best-effort auth delete for legacy users that also exist in auth.users.
     try { await deleteAuthUser(id); } catch (_) { }
@@ -103,8 +115,18 @@ async function removeMany(req, res) {
     const foundIds = [...existingById.keys()];
     const missingIds = uniqueIds.filter((id) => !existingById.has(id));
 
+    const artistUserIds = existingUsers
+        .filter((user) => user.user_type === 'artist')
+        .map((user) => user.user_id);
+    const artists = artistUserIds.length > 0 ? await getArtistsByIds(artistUserIds) : [];
+    const artistById = new Map(artists.map((artist) => [artist.artist_id, artist]));
+
     for (const user of existingUsers) {
         try { await deleteUserAvatarFromStorage(user.user_id, user.avatar_url); } catch (_) { }
+        const artist = artistById.get(user.user_id);
+        if (artist) {
+            try { await deleteArtistCoverFromStorage(artist.artist_id, artist.cover_url); } catch (_) { }
+        }
         try { await deleteAuthUser(user.user_id); } catch (_) { }
     }
 
