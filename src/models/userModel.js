@@ -3,6 +3,11 @@ const { toNum, toDate } = require('../utils/typeConversions');
 const { isUUID, validateSubscriptionType, validateUserType } = require('../utils/validators');
 const table = 'users';
 
+function normalizeEmail(email) {
+    if (typeof email !== 'string') return '';
+    return email.trim().toLowerCase();
+}
+
 function client() {
     // Fallback to public client if service role is not configured
     return supabaseAdmin || supabase;
@@ -10,11 +15,15 @@ function client() {
 
 function sanitizeUserInsert(payload = {}) {
     const out = {};
+    if (payload.user_id !== undefined) {
+        if (payload.user_id !== null && !isUUID(payload.user_id)) throw new Error('user_id must be a UUID or null');
+        out.user_id = payload.user_id;
+    }
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!name) throw new Error('name is required');
     out.name = name;
 
-    const email = typeof payload.email === 'string' ? payload.email.trim() : '';
+    const email = normalizeEmail(payload.email);
     if (!email) throw new Error('email is required');
     out.email = email;
 
@@ -65,7 +74,7 @@ function sanitizeUserUpdate(payload = {}) {
         out.name = name;
     }
     if (payload.email !== undefined) {
-        const email = typeof payload.email === 'string' ? payload.email.trim() : null;
+        const email = normalizeEmail(payload.email);
         if (!email) throw new Error('email cannot be empty');
         out.email = email;
     }
@@ -134,9 +143,9 @@ async function getUser(user_id) {
 }
 
 async function getUserByEmail(email) {
-    const normalized = typeof email === 'string' ? email.trim() : '';
+    const normalized = normalizeEmail(email);
     if (!normalized) return null;
-    const { data, error } = await client().from(table).select('*').eq('email', normalized).maybeSingle();
+    const { data, error } = await client().from(table).select('*').ilike('email', normalized).maybeSingle();
     if (error) throw error;
     return data;
 }
@@ -185,6 +194,27 @@ async function deleteUser(user_id) {
     if (error) throw error;
 }
 
+async function getUsersByIds(user_ids = []) {
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return [];
+    const { data, error } = await client()
+        .from(table)
+        .select('*')
+        .in('user_id', user_ids);
+    if (error) throw error;
+    return data || [];
+}
+
+async function deleteUsers(user_ids = []) {
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return 0;
+    const { data, error } = await client()
+        .from(table)
+        .delete()
+        .in('user_id', user_ids)
+        .select('user_id');
+    if (error) throw error;
+    return Array.isArray(data) ? data.length : 0;
+}
+
 //user functions
 async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
@@ -207,4 +237,18 @@ async function getUserPublic(user_id) {
     return data;
 }
 
-module.exports = { listUsers, listUsersPublic, getUser, getUserByEmail, getUserPublic, createUser, createImportUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };
+module.exports = {
+    listUsers,
+    listUsersPublic,
+    getUser,
+    getUserByEmail,
+    getUserPublic,
+    createUser,
+    createImportUser,
+    updateUser,
+    deleteUser,
+    getUsersByIds,
+    deleteUsers,
+    sanitizeUserInsert,
+    sanitizeUserUpdate,
+};

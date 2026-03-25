@@ -1,8 +1,7 @@
 const createError = require('http-errors');
 const { listArtists, getArtist, createArtist, updateArtist, deleteArtist, sanitizeArtistInsert } = require('../../models/artistModel');
-const { updateUser, sanitizeUserInsert, getUserByEmail } = require('../../models/userModel');
+const { createUser, updateUser, sanitizeUserInsert, getUserByEmail } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, uploadArtistCoverToStorage, deleteArtistCoverFromStorage } = require('../../utils/supabaseStorage');
-const { createAuthUser } = require('../../models/authUserModel');
 const { listTracksByArtist } = require('../../models/trackModel');
 const { listAlbumsByArtist } = require('../../models/albumModel');
 const { isUUID } = require('../../utils/validators');
@@ -15,10 +14,6 @@ function parseJsonMaybe(value) {
     } catch (_) {
         return value;
     }
-}
-
-function isEmailExistsError(error) {
-    return error?.code === 'email_exists' || error?.status === 422;
 }
 
 function isDuplicateArtistError(error) {
@@ -78,17 +73,12 @@ async function create(req, res) {
 
     if (!artist_id) {
         const userInput = sanitizeUserInsert(body);
-        let user = null;
-        try {
-            const authUser = await createAuthUser(userInput.name, userInput.email, userInput.password);
-            user = await updateUser(authUser.id, { ...userInput, user_type: 'artist' });
-        } catch (err) {
-            if (!isEmailExistsError(err)) throw err;
-            const existingUser = await getUserByEmail(userInput.email);
-            if (!existingUser?.user_id) {
-                throw createError(422, 'A user with this email address has already been registered');
-            }
+        let user;
+        const existingUser = await getUserByEmail(userInput.email);
+        if (existingUser?.user_id) {
             user = await updateUser(existingUser.user_id, { name: userInput.name, user_type: 'artist' });
+        } else {
+            user = await createUser({ ...userInput, user_type: 'artist' });
         }
 
         artist_id = user.user_id;

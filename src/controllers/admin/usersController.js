@@ -1,7 +1,17 @@
 const createError = require('http-errors');
-const { listUsers, getUser, createUser, updateUser, deleteUser, sanitizeUserInsert } = require('../../models/userModel');
+const {
+    listUsers,
+    getUser,
+    createUser,
+    updateUser,
+    deleteUser,
+    sanitizeUserInsert,
+    getUserByEmail,
+    getUsersByIds,
+    deleteUsers,
+} = require('../../models/userModel');
 const { uploadUserAvatarToStorage, deleteUserAvatarFromStorage } = require('../../utils/supabaseStorage');
-const { createAuthUser, deleteAuthUser } = require('../../models/authUserModel');
+const { deleteAuthUser } = require('../../models/authUserModel');
 const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
@@ -24,22 +34,12 @@ async function getOne(req, res) {
 async function create(req, res) {
     // req.file may be provided by multer
     const payload = sanitizeUserInsert({ ...req.body });
-    console.log(payload);
-    let authUser = null;
-    let user_final = null;
-    try {
-        // create user record first to ensure user_id exists in auth
-        authUser = await createAuthUser(payload.name, payload.email, payload.password);
-
-        //it automatically sets some columns in users table
-        //lets update other fields
-        user_final = await updateUser(authUser.id, payload);
-    } catch (error) {
-        if (authUser?.id) {
-            try { await deleteAuthUser(authUser.id); } catch (_) { }
-        }
-        throw error;
+    const existingUser = await getUserByEmail(payload.email);
+    if (existingUser?.user_id) {
+        throw createError(409, 'A user with this email already exists');
     }
+
+    const user_final = await createUser(payload);
 
     // upload avatar if file present    
     if (req.file) {
@@ -77,12 +77,44 @@ async function remove(req, res) {
     }
     await deleteUserAvatarFromStorage(id, user.avatar_url);
 
-    // Prefer deleting auth record first (FK cascade handles users row),
-    // then issue a best-effort users delete to avoid leftovers.
-    await deleteAuthUser(id);
+    // Best-effort auth delete for legacy users that also exist in auth.users.
+    try { await deleteAuthUser(id); } catch (_) { }
     try { await deleteUser(id); } catch (_) { }
 
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove };
+async function removeMany(req, res) {
+    const idsInput = req.body?.ids;
+    if (!Array.isArray(idsInput) || idsInput.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+
+    const uniqueIds = [...new Set(idsInput.map((v) => String(v).trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+    if (!uniqueIds.every(isUUID)) {
+        throw createError(400, 'all ids must be valid UUIDs');
+    }
+
+    const existingUsers = await getUsersByIds(uniqueIds);
+    const existingById = new Map(existingUsers.map((u) => [u.user_id, u]));
+    const foundIds = [...existingById.keys()];
+    const missingIds = uniqueIds.filter((id) => !existingById.has(id));
+
+    for (const user of existingUsers) {
+        try { await deleteUserAvatarFromStorage(user.user_id, user.avatar_url); } catch (_) { }
+        try { await deleteAuthUser(user.user_id); } catch (_) { }
+    }
+
+    const deleted = await deleteUsers(foundIds);
+
+    res.json({
+        requested: uniqueIds.length,
+        deleted,
+        missing_ids: missingIds,
+    });
+}
+
+module.exports = { list, getOne, create, update, remove, removeMany };
