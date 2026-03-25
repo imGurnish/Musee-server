@@ -212,6 +212,20 @@ async function deleteArtist(artist_id) {
     if (error) throw error;
 }
 
+async function getArtistsByIds(artist_ids) {
+    if (!Array.isArray(artist_ids) || artist_ids.length === 0) return [];
+    const { data, error } = await client().from(table).select('*').in('artist_id', artist_ids);
+    if (error) throw error;
+    return data || [];
+}
+
+async function deleteArtists(artist_ids) {
+    if (!Array.isArray(artist_ids) || artist_ids.length === 0) return 0;
+    const { count, error } = await client().from(table).delete().in('artist_id', artist_ids);
+    if (error) throw error;
+    return count || 0;
+}
+
 async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
@@ -283,4 +297,4 @@ async function getArtistUser(artist_id) {
     };
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, getArtistsByIds, deleteArtists, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };

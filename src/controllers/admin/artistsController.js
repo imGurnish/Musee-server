@@ -1,5 +1,5 @@
 const createError = require('http-errors');
-const { listArtists, getArtist, createArtist, updateArtist, deleteArtist, sanitizeArtistInsert } = require('../../models/artistModel');
+const { listArtists, getArtist, createArtist, updateArtist, deleteArtist, getArtistsByIds, deleteArtists, sanitizeArtistInsert } = require('../../models/artistModel');
 const { createUser, updateUser, sanitizeUserInsert, getUserByEmail } = require('../../models/userModel');
 const { uploadUserAvatarToStorage, uploadArtistCoverToStorage, deleteArtistCoverFromStorage } = require('../../utils/supabaseStorage');
 const { listTracksByArtist } = require('../../models/trackModel');
@@ -167,7 +167,39 @@ async function remove(req, res) {
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove };
+async function removeMany(req, res) {
+    const idsInput = req.body?.ids;
+    if (!Array.isArray(idsInput) || idsInput.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+
+    const uniqueIds = [...new Set(idsInput.map((v) => String(v).trim()).filter(Boolean))];
+    if (uniqueIds.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+    if (!uniqueIds.every(isUUID)) {
+        throw createError(400, 'all ids must be valid UUIDs');
+    }
+
+    const existingArtists = await getArtistsByIds(uniqueIds);
+    const existingById = new Map(existingArtists.map((a) => [a.artist_id, a]));
+    const foundIds = [...existingById.keys()];
+    const missingIds = uniqueIds.filter((id) => !existingById.has(id));
+
+    for (const artist of existingArtists) {
+        try { await deleteArtistCoverFromStorage(artist.artist_id, artist.cover_url); } catch (_) { }
+    }
+
+    const deleted = await deleteArtists(foundIds);
+
+    res.json({
+        requested: uniqueIds.length,
+        deleted,
+        missing_ids: missingIds,
+    });
+}
+
+module.exports = { list, getOne, create, update, remove, removeMany };
 // GET /api/admin/artists/:id/tracks
 async function listTracks(req, res) {
     const { id } = req.params;
