@@ -14,6 +14,7 @@ const metricsRoutes = require('./admin/metricsRoutes');
 
 router.use(authAdmin);
 router.use('/plans', plansRoutes);
+// Includes: POST /api/admin/users/bulk-delete
 router.use('/users', usersRoutes);
 router.use('/artists', artistsRoutes);
 router.use('/tracks', tracksRoutes);
