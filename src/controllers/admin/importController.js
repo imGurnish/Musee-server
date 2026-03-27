@@ -21,8 +21,13 @@ const DEFAULTS = {
 };
 
 const SAAVN_BASE = 'https://www.jiosaavn.com/api.php';
+const TRACK_IMPORT_CONCURRENCY = Math.max(
+  1,
+  Math.min(8, Number.parseInt(process.env.IMPORT_TRACK_CONCURRENCY || '3', 10) || 3)
+);
 
 const importJobs = new Map();
+const albumImportInFlight = new Map();
 
 function importLog(level, message, context = null) {
   const payload = context ? `${message} | ${JSON.stringify(context)}` : message;
@@ -179,6 +184,56 @@ function safeText(value, fallback = null) {
   if (typeof value !== 'string') return fallback;
   const text = value.trim();
   return text || fallback;
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const source = Array.isArray(items) ? items : [];
+  if (source.length === 0) return [];
+
+  const workerCount = Math.max(1, Math.min(concurrency || 1, source.length));
+  const results = new Array(source.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= source.length) return;
+      results[currentIndex] = await worker(source[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
+function getCompletedAlbumImportSet(options = {}) {
+  const maybeSet = options?.importContext?.completedAlbumExternalIds;
+  return maybeSet instanceof Set ? maybeSet : null;
+}
+
+async function runAlbumImportOnce(albumExternalId, options = {}) {
+  const key = String(albumExternalId || '').trim();
+  if (!key) {
+    throw new Error('albumExternalId is required for album expansion import');
+  }
+
+  const existing = albumImportInFlight.get(key);
+  if (existing) {
+    importLog('info', 'Awaiting in-flight full album import', { albumExternalId: key });
+    return existing;
+  }
+
+  const promise = importAlbumById(key, {
+    ...options,
+    skipFullAlbumExpansion: true
+  })
+    .finally(() => {
+      albumImportInFlight.delete(key);
+    });
+
+  albumImportInFlight.set(key, promise);
+  return promise;
 }
 
 function buildSaavnUrl(callName, params = {}) {
@@ -515,16 +570,34 @@ function normalizeAlbumPayload(rawData, albumId) {
 }
 
 function normalizePlaylistPayload(rawData, playlistId) {
-  const playlist = rawData?.list || rawData?.playlist || rawData;
+  const playlist =
+    rawData?.list ||
+    rawData?.playlist ||
+    rawData?.data?.list ||
+    rawData?.data?.playlist ||
+    rawData?.data ||
+    rawData;
   const songs = asArray(playlist?.list || playlist?.songs);
   const trackIds = songs
     .map((song) => String(song?.id || '').trim())
     .filter(Boolean);
 
+  const resolvedName = safeText(
+    playlist?.title ||
+    playlist?.name ||
+    playlist?.listname ||
+    playlist?.list_name ||
+    playlist?.header_desc ||
+    rawData?.title ||
+    rawData?.name ||
+    rawData?.listname,
+    'Untitled Playlist'
+  );
+
   return {
     rawPlaylist: playlist,
     id: String(playlist?.listid || playlist?.id || playlistId || '').trim(),
-    name: safeText(playlist?.title || playlist?.name, 'Untitled Playlist'),
+    name: resolvedName,
     description: safeText(playlist?.subtitle || playlist?.description, 'Imported from JioSaavn'),
     image: safeText(playlist?.image, null),
     language: safeText(playlist?.language, null),
@@ -753,6 +826,11 @@ async function ensureAlbumImportedShell(albumExternalId, options = {}) {
   });
 
   if (existingAlbumId) {
+    await supabaseAdmin
+      .from('albums')
+      .update({ is_published: true, updated_at: new Date().toISOString() })
+      .eq('album_id', existingAlbumId);
+
     importLog('info', 'Album already exists via external ref', { albumExternalId, albumId: existingAlbumId });
     return { albumId: existingAlbumId, created: false, trackIds: [] };
   }
@@ -777,7 +855,7 @@ async function ensureAlbumImportedShell(albumExternalId, options = {}) {
       cover_url: normalized.image || DEFAULTS.albumCover,
       release_date: normalized.releaseDate || null,
       duration: normalized.songs.reduce((sum, song) => sum + toInt(song?.duration, 0), 0),
-      is_published: false
+      is_published: true
     }, 'album_id');
 
     const albumId = album.album_id || album.id;
@@ -989,6 +1067,41 @@ async function importTrackById(trackId, options = {}) {
     albumExternalId: normalized.albumId
   });
 
+  const shouldExpandAlbum = !options.skipFullAlbumExpansion && Boolean(normalized.albumId);
+  if (shouldExpandAlbum) {
+    const completedAlbumImports = getCompletedAlbumImportSet(options);
+    const alreadyExpanded = completedAlbumImports?.has(normalized.albumId) || false;
+
+    if (!alreadyExpanded) {
+      importLog('info', 'Expanding track import to full album import', {
+        trackId,
+        albumExternalId: normalized.albumId
+      });
+
+      await runAlbumImportOnce(normalized.albumId, options);
+      if (completedAlbumImports) completedAlbumImports.add(normalized.albumId);
+    }
+
+    const importedTrackId = await findEntityIdByExternalId({
+      refTable: 'track_external_refs',
+      entityIdColumn: 'track_id',
+      providerId,
+      externalId: trackId
+    });
+
+    if (!importedTrackId) {
+      throw new Error(`Track ${trackId} was not found after full album import ${normalized.albumId}`);
+    }
+
+    return {
+      trackId: importedTrackId,
+      created: false,
+      downloaded: true,
+      importedViaAlbum: true,
+      albumExternalId: normalized.albumId
+    };
+  }
+
   const artistImport = await ensureArtistImported(normalized.artistExternalId, normalized.artistName, options);
 
   if (existingTrackId) {
@@ -1005,6 +1118,18 @@ async function importTrackById(trackId, options = {}) {
     const linkedAlbumArtist = targetAlbumId
       ? await ensureAlbumArtistLink(targetAlbumId, artistImport.artistId, 'owner')
       : false;
+
+    await supabaseAdmin
+      .from('tracks')
+      .update({ is_published: true, updated_at: new Date().toISOString() })
+      .eq('track_id', existingTrackId);
+
+    if (targetAlbumId) {
+      await supabaseAdmin
+        .from('albums')
+        .update({ is_published: true, updated_at: new Date().toISOString() })
+        .eq('album_id', targetAlbumId);
+    }
 
     importLog('info', 'Track already exists via external ref (reconciled links)', {
       trackId,
@@ -1050,7 +1175,7 @@ async function importTrackById(trackId, options = {}) {
           description: 'Auto-created from track import',
           cover_url: normalized.image || DEFAULTS.albumCover,
           release_date: null,
-          is_published: false,
+          is_published: true,
           duration: normalized.duration
         }, 'album_id');
 
@@ -1079,7 +1204,7 @@ async function importTrackById(trackId, options = {}) {
       duration: normalized.duration,
       language_code: languageCode,
       is_explicit: normalized.isExplicit,
-      is_published: false,
+      is_published: true,
       track_number: normalized.trackNumber,
       subtitle: null,
       lyrics_url: null,
@@ -1120,6 +1245,14 @@ async function importTrackById(trackId, options = {}) {
   }, { operationName: `Import track ${trackId}` });
 
   if (!tx.success) throw new Error(tx.error || 'Track import failed');
+
+  if (albumId) {
+    await supabaseAdmin
+      .from('albums')
+      .update({ is_published: true, updated_at: new Date().toISOString() })
+      .eq('album_id', albumId);
+  }
+
   importLog('info', 'Track core transaction complete', {
     trackId,
     dbTrackId: tx.data.trackId,
@@ -1143,20 +1276,41 @@ async function importAlbumById(albumId, options = {}) {
   const { data: remoteAlbum } = await fetchSaavn('content.getAlbumDetails', { albumid: albumId });
   const normalized = normalizeAlbumPayload(remoteAlbum, albumId);
   const uniqueTrackIds = Array.from(new Set(normalized.trackIds));
+  let completedTracks = 0;
 
-  const importedTracks = [];
-  for (let index = 0; index < uniqueTrackIds.length; index += 1) {
-    const tid = uniqueTrackIds[index];
-    importLog('info', 'Importing album track', { albumId, trackId: tid, index: index + 1, total: uniqueTrackIds.length });
-    const imported = await importTrackById(tid, { ...options, forcedAlbumId: albumShell.albumId });
-    importedTracks.push(imported);
+  importLog('info', 'Importing album tracks with bounded concurrency', {
+    albumId,
+    totalTracks: uniqueTrackIds.length,
+    concurrency: TRACK_IMPORT_CONCURRENCY
+  });
 
-    if (options.jobId) {
-      updateJob(options.jobId, {
-        progress: Math.min(95, Math.round(((index + 1) / Math.max(uniqueTrackIds.length, 1)) * 95))
+  const importedTracks = await runWithConcurrency(
+    uniqueTrackIds,
+    TRACK_IMPORT_CONCURRENCY,
+    async (tid, index) => {
+      importLog('info', 'Importing album track', {
+        albumId,
+        trackId: tid,
+        index: index + 1,
+        total: uniqueTrackIds.length
       });
+
+      const imported = await importTrackById(tid, {
+        ...options,
+        forcedAlbumId: albumShell.albumId,
+        skipFullAlbumExpansion: true
+      });
+
+      completedTracks += 1;
+      if (options.jobId) {
+        updateJob(options.jobId, {
+          progress: Math.min(95, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 95))
+        });
+      }
+
+      return imported;
     }
-  }
+  );
 
   return {
     albumId: albumShell.albumId,
@@ -1231,32 +1385,49 @@ async function importPlaylistById(playlistId, options = {}) {
   }
 
   const uniqueTrackIds = Array.from(new Set(normalized.trackIds));
-  const importedTracks = [];
+  let completedTracks = 0;
 
-  for (let index = 0; index < uniqueTrackIds.length; index += 1) {
-    const tid = uniqueTrackIds[index];
-    importLog('info', 'Importing playlist track', { playlistId, trackId: tid, index: index + 1, total: uniqueTrackIds.length });
-    const trackResult = await importTrackById(tid, options);
-    importedTracks.push(trackResult);
+  importLog('info', 'Importing playlist tracks with bounded concurrency', {
+    playlistId,
+    totalTracks: uniqueTrackIds.length,
+    concurrency: TRACK_IMPORT_CONCURRENCY
+  });
 
-    const linkTx = await executeTransaction(async () => {
-      const result = await supabaseAdmin
-        .from('playlist_tracks')
-        .insert({ playlist_id: playlistDbId, track_id: trackResult.trackId, position: index + 1 });
-
-      if (result.error && result.error.code !== '23505') {
-        throw result.error;
-      }
-    }, { operationName: `Link track ${trackResult.trackId} to playlist ${playlistDbId}` });
-
-    if (!linkTx.success) throw new Error(linkTx.error || 'Failed to link playlist track');
-
-    if (options.jobId) {
-      updateJob(options.jobId, {
-        progress: Math.min(95, Math.round(((index + 1) / Math.max(uniqueTrackIds.length, 1)) * 95))
+  const importedTracks = await runWithConcurrency(
+    uniqueTrackIds,
+    TRACK_IMPORT_CONCURRENCY,
+    async (tid, index) => {
+      importLog('info', 'Importing playlist track', {
+        playlistId,
+        trackId: tid,
+        index: index + 1,
+        total: uniqueTrackIds.length
       });
+
+      const trackResult = await importTrackById(tid, options);
+
+      const linkTx = await executeTransaction(async () => {
+        const result = await supabaseAdmin
+          .from('playlist_tracks')
+          .insert({ playlist_id: playlistDbId, track_id: trackResult.trackId, position: index + 1 });
+
+        if (result.error && result.error.code !== '23505') {
+          throw result.error;
+        }
+      }, { operationName: `Link track ${trackResult.trackId} to playlist ${playlistDbId}` });
+
+      if (!linkTx.success) throw new Error(linkTx.error || 'Failed to link playlist track');
+
+      completedTracks += 1;
+      if (options.jobId) {
+        updateJob(options.jobId, {
+          progress: Math.min(95, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 95))
+        });
+      }
+
+      return trackResult;
     }
-  }
+  );
 
   return {
     playlistId: playlistDbId,
@@ -1286,20 +1457,27 @@ async function runImportJob(job) {
 
   try {
     let result;
+    const importContext = {
+      completedAlbumExternalIds: new Set()
+    };
+
     if (job.type === 'artist') {
-      result = await importArtistById(job.sourceId, { jobId: job.jobId });
+      result = await importArtistById(job.sourceId, { jobId: job.jobId, importContext });
     } else if (job.type === 'album') {
       result = await importAlbumById(job.sourceId, {
-        jobId: job.jobId
+        jobId: job.jobId,
+        importContext
       });
     } else if (job.type === 'track') {
       result = await importTrackById(job.sourceId, {
-        jobId: job.jobId
+        jobId: job.jobId,
+        importContext
       });
     } else if (job.type === 'playlist') {
       result = await importPlaylistById(job.sourceId, {
         jobId: job.jobId,
-        adminId: job.requestedBy
+        adminId: job.requestedBy,
+        importContext
       });
     } else {
       throw new Error(`Unsupported import type: ${job.type}`);

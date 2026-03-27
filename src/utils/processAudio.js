@@ -14,15 +14,21 @@ ffmpeg.setFfprobePath(ffprobePath);
 
 const containerClient = blobServiceClient ? blobServiceClient.getContainerClient(containerName) : null;
 
+function parseEnvPositiveInt(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+    const parsed = Number.parseInt(String(value || ''), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+}
+
 // Tuning/config (can be overridden via ENV)
 const GEN_PROGRESSIVE = process.env.GENERATE_PROGRESSIVE !== '0'; // 1/true by default to preserve behavior
 const HLS_VARIANTS = (process.env.GENERATE_HLS_VARIANTS || '96,160,320')
     .split(',')
     .map(s => parseInt(s.trim(), 10))
     .filter(n => Number.isFinite(n) && n > 0);
-const HLS_SEGMENT_SECONDS = Number(process.env.HLS_SEGMENT_DURATION || 4); // default 4s
-const FFMPEG_THREADS = process.env.FFMPEG_THREADS || '16'; // per-encode thread hint
-const UPLOAD_CONCURRENCY = Number(process.env.UPLOAD_CONCURRENCY || 38);
+const HLS_SEGMENT_SECONDS = parseEnvPositiveInt(process.env.HLS_SEGMENT_DURATION, 6, { min: 2, max: 30 });
+const FFMPEG_THREADS = String(parseEnvPositiveInt(process.env.FFMPEG_THREADS, 4, { min: 1, max: 16 }));
+const UPLOAD_CONCURRENCY = parseEnvPositiveInt(process.env.UPLOAD_CONCURRENCY, 12, { min: 1, max: 64 });
 
 function ffprobe(filePath) {
     return new Promise((resolve, reject) => ffmpeg.ffprobe(filePath, (err, metadata) => (err ? reject(err) : resolve(metadata))));
