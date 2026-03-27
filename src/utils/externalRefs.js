@@ -120,7 +120,31 @@ async function upsertExternalRef({
     .select('*')
     .maybeSingle();
 
-  if (insertResult.error) throw insertResult.error;
+  if (insertResult.error) {
+    if (String(insertResult.error.code) === '23505') {
+      const racedByExternal = await db()
+        .from(refTable)
+        .select('*')
+        .eq('provider_id', providerId)
+        .eq('external_id', String(externalId))
+        .maybeSingle();
+
+      if (racedByExternal.error) throw racedByExternal.error;
+      if (racedByExternal.data) return racedByExternal.data;
+
+      const racedByEntityProvider = await db()
+        .from(refTable)
+        .select('*')
+        .eq(entityIdColumn, entityId)
+        .eq('provider_id', providerId)
+        .maybeSingle();
+
+      if (racedByEntityProvider.error) throw racedByEntityProvider.error;
+      if (racedByEntityProvider.data) return racedByEntityProvider.data;
+    }
+
+    throw insertResult.error;
+  }
   return insertResult.data;
 }
 
