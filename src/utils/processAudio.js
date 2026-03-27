@@ -21,7 +21,7 @@ function parseEnvPositiveInt(value, fallback, { min = 1, max = Number.MAX_SAFE_I
 }
 
 // Tuning/config (can be overridden via ENV)
-const GEN_PROGRESSIVE = process.env.GENERATE_PROGRESSIVE !== '0'; // 1/true by default to preserve behavior
+const GEN_PROGRESSIVE = process.env.GENERATE_PROGRESSIVE === '1'; // disabled by default (HLS-only)
 const HLS_VARIANTS = (process.env.GENERATE_HLS_VARIANTS || '96,160,320')
     .split(',')
     .map(s => parseInt(s.trim(), 10))

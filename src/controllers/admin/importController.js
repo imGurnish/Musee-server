@@ -959,25 +959,16 @@ async function ensureTrackArtistLink(trackId, artistId, role = 'owner') {
 }
 
 async function trackHasIngestedAudio(trackId) {
-  const [trackRow, assetCountResp] = await Promise.all([
-    supabaseAdmin
-      .from('tracks')
-      .select('hls_master_path')
-      .eq('track_id', trackId)
-      .maybeSingle(),
-    supabaseAdmin
-      .from('track_assets')
-      .select('track_asset_id', { count: 'exact', head: true })
-      .eq('track_id', trackId)
-      .eq('asset_type', 'audio_progressive')
-  ]);
+  const trackRow = await supabaseAdmin
+    .from('tracks')
+    .select('hls_master_path')
+    .eq('track_id', trackId)
+    .maybeSingle();
 
   if (trackRow.error) throw trackRow.error;
-  if (assetCountResp.error) throw assetCountResp.error;
 
   const hasHls = Boolean(trackRow.data?.hls_master_path);
-  const progressiveCount = assetCountResp.count || 0;
-  return hasHls && progressiveCount > 0;
+  return hasHls;
 }
 
 async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackId, jobId }) {
