@@ -21,6 +21,7 @@
   "dependencies": {
     "@azure/storage-blob": "^12.29.1",
     "@supabase/supabase-js": "^2.76.0",
+    "axios": "^1.13.6",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",

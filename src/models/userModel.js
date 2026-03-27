@@ -3,6 +3,11 @@ const { toNum, toDate } = require('../utils/typeConversions');
 const { isUUID, validateSubscriptionType, validateUserType } = require('../utils/validators');
 const table = 'users';
 
+function normalizeEmail(email) {
+    if (typeof email !== 'string') return '';
+    return email.trim().toLowerCase();
+}
+
 function client() {
     // Fallback to public client if service role is not configured
     return supabaseAdmin || supabase;
@@ -10,11 +15,15 @@ function client() {
 
 function sanitizeUserInsert(payload = {}) {
     const out = {};
+    if (payload.user_id !== undefined) {
+        if (payload.user_id !== null && !isUUID(payload.user_id)) throw new Error('user_id must be a UUID or null');
+        out.user_id = payload.user_id;
+    }
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!name) throw new Error('name is required');
     out.name = name;
 
-    const email = typeof payload.email === 'string' ? payload.email.trim() : '';
+    const email = normalizeEmail(payload.email);
     if (!email) throw new Error('email is required');
     out.email = email;
 
@@ -29,14 +38,6 @@ function sanitizeUserInsert(payload = {}) {
     }
     if (payload.avatar_url !== undefined) {
         out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png';
-    }
-    if (payload.playlists !== undefined) {
-        if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
-        out.playlists = payload.playlists.map(String);
-    }
-    if (payload.favorites !== undefined) {
-        if (!(payload.favorites && typeof payload.favorites === 'object')) throw new Error('favorites must be an object');
-        out.favorites = payload.favorites;
     }
     if (payload.followers_count !== undefined) {
         const followers_count = toNum(payload.followers_count);
@@ -73,7 +74,7 @@ function sanitizeUserUpdate(payload = {}) {
         out.name = name;
     }
     if (payload.email !== undefined) {
-        const email = typeof payload.email === 'string' ? payload.email.trim() : null;
+        const email = normalizeEmail(payload.email);
         if (!email) throw new Error('email cannot be empty');
         out.email = email;
     }
@@ -88,14 +89,6 @@ function sanitizeUserUpdate(payload = {}) {
     }
     if (payload.avatar_url !== undefined) {
         out.avatar_url = typeof payload.avatar_url === 'string' ? payload.avatar_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png';
-    }
-    if (payload.playlists !== undefined) {
-        if (!Array.isArray(payload.playlists)) throw new Error('playlists must be an array');
-        out.playlists = payload.playlists.map(String);
-    }
-    if (payload.favorites !== undefined) {
-        if (!(payload.favorites && typeof payload.favorites === 'object')) throw new Error('favorites must be an object');
-        out.favorites = payload.favorites;
     }
     if (payload.followers_count !== undefined) {
         const followers_count = toNum(payload.followers_count);
@@ -149,9 +142,42 @@ async function getUser(user_id) {
     return data;
 }
 
+async function getUserByEmail(email) {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return null;
+    const { data, error } = await client().from(table).select('*').ilike('email', normalized).maybeSingle();
+    if (error) throw error;
+    return data;
+}
+
 async function createUser(payload) {
     const input = sanitizeUserInsert(payload);
     const { data, error } = await client().from(table).insert(input).select('*').single();
+    if (error) throw error;
+    return data;
+}
+
+/**
+ * Create an import user (without auth_user)
+ * Used for programmatic imports where no authentication is needed
+ * Sets user_id to NULL (import users don't have auth credentials)
+ * @param {Object} payload - User data (name, email, user_type, etc.)
+ * @returns {Promise<Object>} Created user
+ */
+async function createImportUser(payload) {
+    const input = sanitizeUserInsert(payload);
+    // Import users don't have auth_user, so user_id remains NULL
+    const insertData = {
+        ...input,
+        user_id: null // Explicitly set NULL for import users
+    };
+    
+    const { data, error } = await client()
+        .from(table)
+        .insert(insertData)
+        .select('*')
+        .single();
+    
     if (error) throw error;
     return data;
 }
@@ -166,6 +192,27 @@ async function updateUser(user_id, payload) {
 async function deleteUser(user_id) {
     const { error } = await client().from(table).delete().eq('user_id', user_id);
     if (error) throw error;
+}
+
+async function getUsersByIds(user_ids = []) {
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return [];
+    const { data, error } = await client()
+        .from(table)
+        .select('*')
+        .in('user_id', user_ids);
+    if (error) throw error;
+    return data || [];
+}
+
+async function deleteUsers(user_ids = []) {
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return 0;
+    const { data, error } = await client()
+        .from(table)
+        .delete()
+        .in('user_id', user_ids)
+        .select('user_id');
+    if (error) throw error;
+    return Array.isArray(data) ? data.length : 0;
 }
 
 //user functions
@@ -185,9 +232,23 @@ async function listUsersPublic({ limit = 20, offset = 0, q } = {}) {
 
 async function getUserPublic(user_id) {
     // followings_count column per schema
-    const { data, error } = await client().from(table).select('user_id, name, followers_count, followings_count, avatar_url, playlists').eq('user_id', user_id).maybeSingle();
+    const { data, error } = await client().from(table).select('user_id, name, followers_count, followings_count, avatar_url').eq('user_id', user_id).maybeSingle();
     if (error) throw error;
     return data;
 }
 
-module.exports = { listUsers, listUsersPublic, getUser, getUserPublic, createUser, updateUser, deleteUser, sanitizeUserInsert, sanitizeUserUpdate };
+module.exports = {
+    listUsers,
+    listUsersPublic,
+    getUser,
+    getUserByEmail,
+    getUserPublic,
+    createUser,
+    createImportUser,
+    updateUser,
+    deleteUser,
+    getUsersByIds,
+    deleteUsers,
+    sanitizeUserInsert,
+    sanitizeUserUpdate,
+};

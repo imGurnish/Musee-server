@@ -14,6 +14,7 @@ const metricsRoutes = require('./admin/metricsRoutes');
 
 router.use(authAdmin);
 router.use('/plans', plansRoutes);
+// Includes: POST /api/admin/users/bulk-delete
 router.use('/users', usersRoutes);
 router.use('/artists', artistsRoutes);
 router.use('/tracks', tracksRoutes);
@@ -22,5 +23,12 @@ router.use('/playlists', playlistsRoutes);
 router.use('/countries', countriesRoutes);
 router.use('/regions', regionsRoutes);
 router.use('/metrics', metricsRoutes);
+
+try {
+	const importRoutes = require('./admin/importRoutes');
+	router.use('/import', importRoutes);
+} catch (error) {
+	console.warn('Import routes not mounted:', error?.message || error);
+}
 
 module.exports = router;

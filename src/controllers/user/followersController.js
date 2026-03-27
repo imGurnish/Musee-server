@@ -1,4 +1,5 @@
 const createError = require('http-errors');
+const { isUUID } = require('../../utils/validators');
 const {
     isFollowing: isFollowingModel,
     followUser,
@@ -18,6 +19,7 @@ async function follow(req, res) {
     const targetId = req.params.id;
     const me = req.user && req.user.id;
     if (!me) throw createError(401, 'Unauthorized');
+    if (!isUUID(targetId)) throw createError(400, 'invalid user id');
 
     try {
         await followUser(me, targetId);
@@ -32,6 +34,7 @@ async function unfollow(req, res) {
     const targetId = req.params.id;
     const me = req.user && req.user.id;
     if (!me) throw createError(401, 'Unauthorized');
+    if (!isUUID(targetId)) throw createError(400, 'invalid user id');
 
     try {
         await unfollowUser(me, targetId);
@@ -65,6 +68,7 @@ async function status(req, res) {
     const targetId = req.params.id;
     const me = req.user && req.user.id;
     if (!me) throw createError(401, 'Unauthorized');
+    if (!isUUID(targetId)) throw createError(400, 'invalid user id');
     const following = await isFollowingModel(me, targetId);
     res.json({ following });
 }

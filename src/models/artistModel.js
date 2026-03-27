@@ -7,6 +7,16 @@ function client() {
     return supabaseAdmin || supabase;
 }
 
+function toBoolean(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'string') {
+        const t = v.trim().toLowerCase();
+        if (t === 'true' || t === '1') return true;
+        if (t === 'false' || t === '0') return false;
+    }
+    return Boolean(v);
+}
+
 function sanitizeArtistInsert(payload = {}) {
     const out = {};
     // artist_id required (references users.user_id)
@@ -19,11 +29,6 @@ function sanitizeArtistInsert(payload = {}) {
 
     out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png';
 
-    if (payload.genres !== undefined) {
-        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
-        out.genres = payload.genres.map(String);
-    }
-
     // debut_year is optional; validate if provided
     if (payload.debut_year !== undefined) {
         const debut_year = toNum(payload.debut_year, null);
@@ -32,7 +37,7 @@ function sanitizeArtistInsert(payload = {}) {
         out.debut_year = debut_year;
     }
 
-    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
+    if (payload.is_verified !== undefined) out.is_verified = toBoolean(payload.is_verified);
 
     if (payload.monthly_listeners !== undefined) {
         out.monthly_listeners = toNum(payload.monthly_listeners, null);
@@ -64,18 +69,13 @@ function sanitizeArtistUpdate(payload = {}) {
     if (payload.bio !== undefined) out.bio = typeof payload.bio === 'string' ? payload.bio.trim() : null;
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
-    if (payload.genres !== undefined) {
-        if (!Array.isArray(payload.genres)) throw new Error('genres must be an array');
-        out.genres = payload.genres.map(String);
-    }
-
     if (payload.debut_year !== undefined) {
         const debut_year = toNum(payload.debut_year, null);
         if (!(debut_year >= 1900 && debut_year <= new Date().getFullYear())) throw new Error('debut_year must be a valid year');
         out.debut_year = debut_year;
     }
 
-    if (payload.is_verified !== undefined) out.is_verified = Boolean(payload.is_verified);
+    if (payload.is_verified !== undefined) out.is_verified = toBoolean(payload.is_verified);
 
     if (payload.monthly_listeners !== undefined) {
         out.monthly_listeners = toNum(payload.monthly_listeners, null);
@@ -113,8 +113,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
             avatar_url,
             subscription_type,
             plan_id,
-            playlists,
-            favorites,
             followers_count,
             followings_count,
             last_login_at,
@@ -126,7 +124,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
                 artist_id,
                 bio,
                 cover_url,
-                genres,
                 debut_year,
                 is_verified,
                 social_links,
@@ -153,7 +150,7 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
         artist_id: row.artists?.artist_id,
         bio: row.artists?.bio,
         cover_url: row.artists?.cover_url,
-        genres: row.artists?.genres || [],
+        genres: [],
         debut_year: row.artists?.debut_year,
         is_verified: row.artists?.is_verified,
         social_links: row.artists?.social_links || null,
@@ -171,8 +168,6 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
             avatar_url: row.avatar_url,
             subscription_type: row.subscription_type,
             plan_id: row.plan_id,
-            playlists: row.playlists,
-            favorites: row.favorites,
             followers_count: row.followers_count,
             followings_count: row.followings_count,
             last_login_at: row.last_login_at,
@@ -217,6 +212,20 @@ async function deleteArtist(artist_id) {
     if (error) throw error;
 }
 
+async function getArtistsByIds(artist_ids) {
+    if (!Array.isArray(artist_ids) || artist_ids.length === 0) return [];
+    const { data, error } = await client().from(table).select('*').in('artist_id', artist_ids);
+    if (error) throw error;
+    return data || [];
+}
+
+async function deleteArtists(artist_ids) {
+    if (!Array.isArray(artist_ids) || artist_ids.length === 0) return 0;
+    const { count, error } = await client().from(table).delete().in('artist_id', artist_ids);
+    if (error) throw error;
+    return count || 0;
+}
+
 async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
@@ -232,7 +241,6 @@ async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
       artists:artists!artists_artist_id_fkey (
         bio,
         cover_url,
-        genres,
         debut_year,
         is_verified,
         monthly_listeners
@@ -256,7 +264,7 @@ async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
         avatar_url: row.avatar_url,
         cover_url: row.artists?.cover_url ?? null,
         bio: row.artists?.bio ?? null,
-        genres: row.artists?.genres ?? [],
+        genres: [],
         debut_year: row.artists?.debut_year ?? null,
         is_verified: row.artists?.is_verified ?? false,
         monthly_listeners: row.artists?.monthly_listeners ?? 0,
@@ -269,7 +277,7 @@ async function getArtistUser(artist_id) {
     const { data, error } = await client()
         .from(table)
         .select(
-            `artist_id, cover_url, bio, genres, debut_year, is_verified, monthly_listeners,
+            `artist_id, cover_url, bio, debut_year, is_verified, monthly_listeners,
              users:users!artists_artist_id_fkey(name, avatar_url)`
         )
         .eq('artist_id', artist_id)
@@ -282,11 +290,11 @@ async function getArtistUser(artist_id) {
         avatar_url: data.users?.avatar_url || null,
         cover_url: data.cover_url,
         bio: data.bio,
-        genres: data.genres,
+        genres: [],
         debut_year: data.debut_year,
         is_verified: data.is_verified,
         monthly_listeners: data.monthly_listeners,
     };
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, getArtistsByIds, deleteArtists, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };

@@ -20,7 +20,7 @@ async function updateTrackArtistByPair(track_id, artist_id, role) {
 
 async function deleteTrackArtistByPair(track_id, artist_id) {
     if (!(isUUID(track_id) && isUUID(artist_id))) throw new Error('invalid fields');
-    const { data, error } = await client().from(table).delete().eq('track_id', track_id).eq('artist_id', artist_id).select('id').maybeSingle();
+    const { data, error } = await client().from(table).delete().eq('track_id', track_id).eq('artist_id', artist_id).select('track_artist_id').maybeSingle();
     if (error) throw error;
     return !!data;
 }

@@ -1,14 +1,20 @@
 const createError = require('http-errors');
+const { supabase, supabaseAdmin } = require('../../db/config');
 const { processAudioBuffer } = require('../../utils/processAudio');
 const { listTracks, getTrack, createTrack, updateTrack, deleteTrack, listTracksUser, getTrackUser } = require('../../models/trackModel');
 const { getAlbum } = require('../../models/albumModel');
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on tracks
-    const allowed = new Set(['title', 'album_id', 'duration', 'lyrics_url', 'is_explicit', 'is_published']);
+    const allowed = new Set([
+        'title', 'subtitle', 'album_id', 'track_number', 'disc_number',
+        'duration', 'language_code', 'lyrics_url', 'lyrics_snippet',
+        'is_explicit', 'is_published', 'copyright_text', 'label_id', 'hls_master_path'
+    ]);
     const out = {};
     for (const key of Object.keys(payload || {})) {
         if (allowed.has(key)) out[key] = payload[key];
@@ -35,6 +41,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const item = await getTrackUser(id);
     if (!item) throw createError(404, 'Track not found');
     res.json(item);
@@ -88,8 +95,13 @@ async function create(req, res) {
             result = await updateTrack(created.track_id, { is_published: true });
         } catch (e) {
             console.error('Audio processing failed after track creation:', e?.message || e);
-            // return created record but indicate processing failed
-            return res.status(500).json({ error: 'Audio processing failed', track: created });
+            // rollback created track to avoid half-data
+            try { await deleteTrack(created.track_id); } catch (_) { }
+            return res.status(500).json({
+                error: 'Audio processing failed',
+                rolled_back: true,
+                track_id: created.track_id,
+            });
         }
     }
 
@@ -108,6 +120,7 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     const body = filterAllowedFields({ ...req.body });
 
     var result;
@@ -126,6 +139,9 @@ async function update(req, res) {
     // if audio file present, process it and update track_audios
     const audioFile = getFileFromReq(req, 'audio');
     if (audioFile) {
+        const db = supabaseAdmin || supabase;
+        const previousAudiosRes = await db.from('track_audios').select('*').eq('track_id', id);
+        const previousAudios = previousAudiosRes.error ? [] : (previousAudiosRes.data || []);
         try {
             const audioResult = await processAudioBuffer(audioFile, id);
             await deleteAudiosForTrack(id);
@@ -138,6 +154,13 @@ async function update(req, res) {
             result = await updateTrack(id, { is_published: true });
         } catch (e) {
             console.error('Audio processing failed during update:', e?.message || e);
+            // restore old rows to keep consistency
+            try {
+                await deleteAudiosForTrack(id);
+                for (const a of previousAudios) {
+                    await addTrackAudio(id, a.ext, a.bitrate, a.path);
+                }
+            } catch (_) { }
             return res.status(500).json({ error: 'Audio processing failed', track_id: id });
         }
     }
@@ -156,6 +179,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid track id');
     // authorization: only album owners can delete tracks under that album
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });

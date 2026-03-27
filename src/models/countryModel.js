@@ -15,7 +15,7 @@ function sanitizeInsert(payload = {}) {
     const code = typeof payload.code === 'string' ? payload.code.trim() : '';
     const name = typeof payload.name === 'string' ? payload.name.trim() : '';
     if (!code) throw new Error('code is required');
-    if (code.length != 2) throw new Error('code must of len 2');
+    if (code.length != 2) throw new Error('code must be 2 characters long');
     if (!name) throw new Error('name is required');
     out.code = code;
     out.name = name;
@@ -28,7 +28,7 @@ function sanitizeUpdate(payload = {}) {
     if (payload.code !== undefined) {
         const code = typeof payload.code === 'string' ? payload.code.trim() : '';
         if (!code) throw new Error('code cannot be empty');
-        if (code.length != 2) throw new Error('code must of len 2');
+        if (code.length != 2) throw new Error('code must be 2 characters long');
         out.code = code;
     }
     if (payload.name !== undefined) {

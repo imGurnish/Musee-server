@@ -83,37 +83,49 @@ async function deleteFromSupabaseStorage(bucket, path) {
 }
 
 async function deleteUserAvatarFromStorage(userId, avatarUrl) {
-    const ext = avatarUrl.split('.').pop();
+    if (!avatarUrl || typeof avatarUrl !== 'string') return false;
+    const clean = avatarUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `users/${userId}.${ext}`;
     return await deleteFromSupabaseStorage(AVATAR_BUCKET, path);
 }
 
 async function deleteArtistCoverFromStorage(artistId, coverUrl) {
-    const ext = coverUrl.split('.').pop();
+    if (!coverUrl || typeof coverUrl !== 'string') return false;
+    const clean = coverUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `artists/${artistId}.${ext}`;
     return await deleteFromSupabaseStorage(COVERS_BUCKET, path);
 }
 
 async function deleteTrackCoverFromStorage(trackId, coverUrl) {
-    const ext = coverUrl.split('.').pop();
+    if (!coverUrl || typeof coverUrl !== 'string') return false;
+    const clean = coverUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `tracks/${trackId}.${ext}`;
     return await deleteFromSupabaseStorage(COVERS_BUCKET, path);
 }
 
 async function deleteTrackVideoFromStorage(trackId, videoUrl) {
-    const ext = videoUrl.split('.').pop();
+    if (!videoUrl || typeof videoUrl !== 'string') return false;
+    const clean = videoUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `tracks/${trackId}.${ext}`;
     return await deleteFromSupabaseStorage(VIDEOS_BUCKET, path);
 }
 
 async function deleteAlbumCoverFromStorage(albumId, coverUrl) {
-    const ext = coverUrl.split('.').pop();
+    if (!coverUrl || typeof coverUrl !== 'string') return false;
+    const clean = coverUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `albums/${albumId}.${ext}`;
     return await deleteFromSupabaseStorage(COVERS_BUCKET, path);
 }
 
 async function deletePlaylistCoverFromStorage(playlistId, coverUrl) {
-    const ext = coverUrl.split('.').pop();
+    if (!coverUrl || typeof coverUrl !== 'string') return false;
+    const clean = coverUrl.split('?')[0];
+    const ext = clean.split('.').pop();
     const path = `playlists/${playlistId}.${ext}`;
     return await deleteFromSupabaseStorage(COVERS_BUCKET, path);
 }

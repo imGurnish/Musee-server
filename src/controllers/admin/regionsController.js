@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listRegions, getRegion, createRegion, updateRegion, deleteRegion } = require('../../models/regionModel');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -13,6 +14,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid region id');
     const item = await getRegion(id);
     if (!item) throw createError(404, 'Region not found');
     res.json(item);
@@ -26,6 +28,9 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid region id');
+    const existing = await getRegion(id);
+    if (!existing) throw createError(404, 'Region not found');
     const payload = { ...req.body };
     const item = await updateRegion(id, payload);
     res.json(item);
@@ -33,6 +38,9 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid region id');
+    const existing = await getRegion(id);
+    if (!existing) throw createError(404, 'Region not found');
     await deleteRegion(id);
     res.status(204).send();
 }

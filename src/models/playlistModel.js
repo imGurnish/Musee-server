@@ -19,17 +19,6 @@ function toNum(v, def) {
 
 // no dates to coerce here
 
-function toTextArray(val) {
-    if (val === undefined) return undefined;
-    if (Array.isArray(val)) return val.map(String);
-    if (typeof val === 'string') {
-        const t = val.trim();
-        if (!t) return [];
-        return t.includes(',') ? t.split(',').map(s => s.trim()).filter(Boolean) : [t];
-    }
-    return [];
-}
-
 // normalized schema uses playlist_tracks; no track_ids array on playlists
 
 function sanitizeInsert(payload = {}) {
@@ -45,9 +34,7 @@ function sanitizeInsert(payload = {}) {
 
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
-
-    const genres = toTextArray(payload.genres);
-    if (genres !== undefined) out.genres = genres;
+    if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : null;
 
     out.cover_url = typeof payload.cover_url === 'string' && payload.cover_url.trim() ? payload.cover_url.trim() : 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/playlists/default_cover.png';
 
@@ -75,9 +62,7 @@ function sanitizeUpdate(payload = {}) {
     }
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
-
-    const genres = toTextArray(payload.genres);
-    if (genres !== undefined) out.genres = genres;
+    if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : payload.language_code;
 
     if (payload.cover_url !== undefined) out.cover_url = typeof payload.cover_url === 'string' ? payload.cover_url.trim() : null;
 
@@ -104,7 +89,7 @@ async function getPlaylist(playlist_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            playlist_id, name, creator_id, is_public, description, cover_url, genres, likes_count, total_tracks, duration, created_at, updated_at,
+            playlist_id, name, creator_id, is_public, description, cover_url, language_code, likes_count, total_tracks, duration, created_at, updated_at,
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 tracks:tracks!playlist_tracks_track_id_fkey(
                     track_id, title, duration, created_at
@@ -143,7 +128,7 @@ async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
-    let qb = client().from(table).select('playlist_id, name, creator_id, cover_url, genres, duration, total_tracks', { count: 'exact' }).eq('is_public', true).order('created_at', { ascending: false });
+    let qb = client().from(table).select('playlist_id, name, creator_id, cover_url, language_code, duration, total_tracks', { count: 'exact' }).eq('is_public', true).order('created_at', { ascending: false });
     if (q) qb = qb.ilike('name', `%${q}%`);
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
@@ -154,7 +139,7 @@ async function getPlaylistUser(playlist_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            playlist_id, name, creator_id, cover_url, genres, duration, total_tracks,
+            playlist_id, name, creator_id, cover_url, language_code, duration, total_tracks,
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 tracks:tracks!playlist_tracks_track_id_fkey(
                     track_id, title, duration, created_at

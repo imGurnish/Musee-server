@@ -1,5 +1,6 @@
 const createError = require('http-errors');
 const { listCountries, getCountry, createCountry, updateCountry, deleteCountry } = require('../../models/countryModel');
+const { isUUID } = require('../../utils/validators');
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -12,6 +13,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid country id');
     const item = await getCountry(id);
     if (!item) throw createError(404, 'Country not found');
     res.json(item);
@@ -25,6 +27,9 @@ async function create(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid country id');
+    const existing = await getCountry(id);
+    if (!existing) throw createError(404, 'Country not found');
     const payload = { ...req.body };
     const item = await updateCountry(id, payload);
     res.json(item);
@@ -32,6 +37,9 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid country id');
+    const existing = await getCountry(id);
+    if (!existing) throw createError(404, 'Country not found');
     await deleteCountry(id);
     res.status(204).send();
 }

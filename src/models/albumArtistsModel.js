@@ -16,13 +16,13 @@ async function createAlbumArtist(album_id, artist_id, role) {
 
 async function updateAlbumArtist(id, role) {
     if (!validateArtistRoles(role)) throw new Error('invalid role');
-    const { data, error } = await client().from(table).update({ 'role': role }).eq('id', id).select('*').single();
+    const { data, error } = await client().from(table).update({ 'role': role }).eq('album_artist_id', id).select('*').single();
     if (error) throw error;
     return data;
 }
 
 async function deleteAlbumArtist(id) {
-    const { error } = await client().from(table).delete().eq('id', id);
+    const { error } = await client().from(table).delete().eq('album_artist_id', id);
     if (error) throw error;
 }
 
@@ -42,7 +42,7 @@ async function updateAlbumArtistByPair(album_id, artist_id, role) {
 
 async function deleteAlbumArtistByPair(album_id, artist_id) {
     if (!(isUUID(album_id) && isUUID(artist_id))) throw new Error('invalid fields');
-    const { data, error } = await client().from(table).delete().eq('album_id', album_id).eq('artist_id', artist_id).select('id').maybeSingle();
+    const { data, error } = await client().from(table).delete().eq('album_id', album_id).eq('artist_id', artist_id).select('album_artist_id').maybeSingle();
     if (error) throw error;
     return !!data;
 }

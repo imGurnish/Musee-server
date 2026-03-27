@@ -1,12 +1,39 @@
 const { supabase, supabaseAdmin } = require('../db/config');
 const { getBlobSasUrl, isAbsoluteUrl, getBlobPublicUrl } = require('../utils/azureSas');
-const { isUUID, validateAudioExts, validateArtistRoles } = require('../utils/validators');
+const { isUUID } = require('../utils/validators');
 const { toNum } = require('../utils/typeConversions');
 
 const table = 'tracks';
 
 function client() {
     return supabaseAdmin || supabase;
+}
+
+function toSignedAudioFromAsset(asset) {
+    if (!asset || asset.asset_type !== 'audio_progressive') return null;
+    const rawPath = asset.file_path;
+    try {
+        const url = isAbsoluteUrl(rawPath) ? rawPath : getBlobSasUrl(rawPath);
+        return {
+            id: asset.track_asset_id,
+            ext: asset.ext,
+            bitrate: asset.bitrate_kbps,
+            path: url,
+            created_at: asset.created_at,
+        };
+    } catch (e) {
+        return {
+            id: asset.track_asset_id,
+            ext: asset.ext,
+            bitrate: asset.bitrate_kbps,
+            path: rawPath,
+            created_at: asset.created_at,
+        };
+    }
+}
+
+function mapRowAudios(row) {
+    return (row.track_assets || []).map(toSignedAudioFromAsset).filter(Boolean);
 }
 
 // helpers are imported from validators/typeConversions
@@ -22,9 +49,23 @@ function sanitizeInsert(payload = {}) {
     if (!isUUID(payload.album_id)) throw new Error('album_id (UUID) is required');
     out.album_id = payload.album_id;
 
+    if (payload.subtitle !== undefined) out.subtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim() : null;
+    if (payload.track_number !== undefined) {
+        const trackNumber = toNum(payload.track_number, null);
+        if (trackNumber === null || trackNumber <= 0) throw new Error('track_number must be a positive integer');
+        out.track_number = Math.trunc(trackNumber);
+    }
+    if (payload.disc_number !== undefined) {
+        const discNumber = toNum(payload.disc_number, null);
+        if (discNumber === null || discNumber <= 0) throw new Error('disc_number must be a positive integer');
+        out.disc_number = Math.trunc(discNumber);
+    }
+    if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : null;
+
     out.video_url = typeof payload.video_url === 'string' && payload.video_url.trim() ? payload.video_url.trim() : null;
 
     out.lyrics_url = typeof payload.lyrics_url === 'string' && payload.lyrics_url.trim() ? payload.lyrics_url.trim() : null;
+    if (payload.lyrics_snippet !== undefined) out.lyrics_snippet = typeof payload.lyrics_snippet === 'string' ? payload.lyrics_snippet.trim() : null;
 
     // duration required integer >= 0
     const duration = toNum(payload.duration, null);
@@ -38,6 +79,12 @@ function sanitizeInsert(payload = {}) {
     out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
 
     out.popularity_score = toNum(payload.popularity_score) || 0;
+    if (payload.copyright_text !== undefined) out.copyright_text = typeof payload.copyright_text === 'string' ? payload.copyright_text.trim() : null;
+    if (payload.label_id !== undefined) {
+        if (payload.label_id !== null && !isUUID(payload.label_id)) throw new Error('label_id must be a valid UUID');
+        out.label_id = payload.label_id;
+    }
+    if (payload.hls_master_path !== undefined) out.hls_master_path = typeof payload.hls_master_path === 'string' ? payload.hls_master_path.trim() : null;
 
     out.is_published = !!payload.is_published;
 
@@ -58,7 +105,20 @@ function sanitizeUpdate(payload = {}) {
         if (!isUUID(payload.album_id)) throw new Error('album_id must be a valid UUID');
         out.album_id = payload.album_id;
     }
+    if (payload.subtitle !== undefined) out.subtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim() : null;
+    if (payload.track_number !== undefined) {
+        const trackNumber = toNum(payload.track_number, null);
+        if (trackNumber === null || trackNumber <= 0) throw new Error('track_number must be a positive integer');
+        out.track_number = Math.trunc(trackNumber);
+    }
+    if (payload.disc_number !== undefined) {
+        const discNumber = toNum(payload.disc_number, null);
+        if (discNumber === null || discNumber <= 0) throw new Error('disc_number must be a positive integer');
+        out.disc_number = Math.trunc(discNumber);
+    }
+    if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : null;
     if (payload.lyrics_url !== undefined) out.lyrics_url = typeof payload.lyrics_url === 'string' ? payload.lyrics_url.trim() : null;
+    if (payload.lyrics_snippet !== undefined) out.lyrics_snippet = typeof payload.lyrics_snippet === 'string' ? payload.lyrics_snippet.trim() : null;
     if (payload.video_url !== undefined) out.video_url = typeof payload.video_url === 'string' ? payload.video_url.trim() : null;
     if (payload.duration !== undefined) {
         const d = toNum(payload.duration, null);
@@ -69,6 +129,12 @@ function sanitizeUpdate(payload = {}) {
     if (payload.is_explicit !== undefined) out.is_explicit = !!payload.is_explicit;
     if (payload.likes_count !== undefined) out.likes_count = Math.max(0, Math.trunc(toNum(payload.likes_count, 0)));
     if (payload.popularity_score !== undefined) out.popularity_score = toNum(payload.popularity_score) || 0;
+    if (payload.copyright_text !== undefined) out.copyright_text = typeof payload.copyright_text === 'string' ? payload.copyright_text.trim() : null;
+    if (payload.label_id !== undefined) {
+        if (payload.label_id !== null && !isUUID(payload.label_id)) throw new Error('label_id must be a valid UUID');
+        out.label_id = payload.label_id;
+    }
+    if (payload.hls_master_path !== undefined) out.hls_master_path = typeof payload.hls_master_path === 'string' ? payload.hls_master_path.trim() : null;
     if (payload.is_published !== undefined) out.is_published = !!payload.is_published;
 
     return out;
@@ -83,7 +149,8 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -91,8 +158,12 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
                     users:users!artists_artist_id_fkey(user_id, name, avatar_url)
                 )
             ),
-            track_audios:track_audios!audio_info_track_id_fkey(
-                id, ext, bitrate, path, created_at
+            track_assets:track_assets!track_assets_track_id_fkey(
+                track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .order('created_at', { ascending: false });
@@ -100,26 +171,29 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
-    const toSignedAudio = (a) => {
-        try {
-            const p = a.path;
-            const url = isAbsoluteUrl(p) ? p : getBlobSasUrl(p);
-            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: url, created_at: a.created_at };
-        } catch (e) {
-            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: a.path, created_at: a.created_at };
-        }
-    };
 
     const items = (data || []).map(row => ({
         track_id: row.track_id,
         title: row.title,
+        subtitle: row.subtitle,
         album_id: row.album_id,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
+        track_number: row.track_number,
+        disc_number: row.disc_number,
+        language_code: row.language_code,
         lyrics_url: row.lyrics_url,
+        lyrics_snippet: row.lyrics_snippet,
         duration: row.duration,
         play_count: row.play_count,
         is_explicit: row.is_explicit,
         likes_count: row.likes_count,
         popularity_score: row.popularity_score,
+        copyright_text: row.copyright_text,
+        label_id: row.label_id,
+        hls_master_path: row.hls_master_path,
         created_at: row.created_at,
         updated_at: row.updated_at,
         video_url: row.video_url,
@@ -135,7 +209,8 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
-        audios: (row.track_audios || []).map(toSignedAudio),
+        audios: mapRowAudios(row),
+        external_refs: row.track_external_refs || null,
     }));
     return { items, total: count };
 }
@@ -144,7 +219,8 @@ async function getTrack(track_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -152,8 +228,12 @@ async function getTrack(track_id) {
                     users:users!artists_artist_id_fkey(user_id, name, avatar_url)
                 )
             ),
-            track_audios:track_audios!audio_info_track_id_fkey(
-                id, ext, bitrate, path, created_at
+            track_assets:track_assets!track_assets_track_id_fkey(
+                track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `)
         .eq('track_id', track_id)
@@ -163,13 +243,25 @@ async function getTrack(track_id) {
     return {
         track_id: data.track_id,
         title: data.title,
+        subtitle: data.subtitle,
         album_id: data.album_id,
+        album: {
+            title: data.albums?.title,
+            cover_url: data.albums?.cover_url,
+        },
+        track_number: data.track_number,
+        disc_number: data.disc_number,
+        language_code: data.language_code,
         lyrics_url: data.lyrics_url,
+        lyrics_snippet: data.lyrics_snippet,
         duration: data.duration,
         play_count: data.play_count,
         is_explicit: data.is_explicit,
         likes_count: data.likes_count,
         popularity_score: data.popularity_score,
+        copyright_text: data.copyright_text,
+        label_id: data.label_id,
+        hls_master_path: data.hls_master_path,
         created_at: data.created_at,
         updated_at: data.updated_at,
         video_url: data.video_url,
@@ -184,15 +276,8 @@ async function getTrack(track_id) {
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
-        audios: (data.track_audios || []).map(a => {
-            try {
-                const p = a.path;
-                const url = isAbsoluteUrl(p) ? p : getBlobSasUrl(p);
-                return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: url, created_at: a.created_at };
-            } catch (e) {
-                return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: a.path, created_at: a.created_at };
-            }
-        }),
+        audios: mapRowAudios(data),
+        external_refs: data.track_external_refs || null
     };
 }
 
@@ -230,6 +315,10 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
                 )
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('is_published', true)
@@ -256,6 +345,7 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
+        external_refs: row.track_external_refs || null
     }));
     return { items, total: count };
 }
@@ -272,8 +362,12 @@ async function getTrackUser(track_id) {
                     users:users!artists_artist_id_fkey(name, avatar_url)
                 )
             ),
-            track_audios:track_audios!audio_info_track_id_fkey(
-                ext, bitrate, path
+            track_assets:track_assets!track_assets_track_id_fkey(
+                track_asset_id, ext, bitrate_kbps, file_path, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `)
         .eq('track_id', track_id)
@@ -303,15 +397,8 @@ async function getTrackUser(track_id) {
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
-        audios: (data.track_audios || []).map(a => {
-            try {
-                const p = a.path;
-                const url = isAbsoluteUrl(p) ? p : getBlobSasUrl(p);
-                return { ext: a.ext, bitrate: a.bitrate, path: url };
-            } catch (e) {
-                return { ext: a.ext, bitrate: a.bitrate, path: a.path };
-            }
-        }),
+        audios: mapRowAudios(data).map(a => ({ ext: a.ext, bitrate: a.bitrate, path: a.path })),
+        external_refs: data.track_external_refs || null
     };
 }
 
@@ -324,7 +411,8 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, album_id, lyrics_url, duration, play_count, is_explicit, likes_count, popularity_score, created_at, updated_at, video_url, is_published,
+            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!inner(
                 role,
                 artists:artists!track_artists_artist_id_fkey(
@@ -332,8 +420,12 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
                     users:users!artists_artist_id_fkey(user_id, name, avatar_url)
                 )
             ),
-            track_audios:track_audios!audio_info_track_id_fkey(
-                id, ext, bitrate, path, created_at
+            track_assets:track_assets!track_assets_track_id_fkey(
+                track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('track_artists.artist_id', artist_id)
@@ -343,26 +435,28 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
 
-    const toSignedAudio = (a) => {
-        try {
-            const p = a.path;
-            const url = isAbsoluteUrl(p) ? p : getBlobSasUrl(p);
-            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: url, created_at: a.created_at };
-        } catch (e) {
-            return { id: a.id, ext: a.ext, bitrate: a.bitrate, path: a.path, created_at: a.created_at };
-        }
-    };
-
     const items = (data || []).map(row => ({
         track_id: row.track_id,
         title: row.title,
+        subtitle: row.subtitle,
         album_id: row.album_id,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
+        track_number: row.track_number,
+        disc_number: row.disc_number,
+        language_code: row.language_code,
         lyrics_url: row.lyrics_url,
+        lyrics_snippet: row.lyrics_snippet,
         duration: row.duration,
         play_count: row.play_count,
         is_explicit: row.is_explicit,
         likes_count: row.likes_count,
         popularity_score: row.popularity_score,
+        copyright_text: row.copyright_text,
+        label_id: row.label_id,
+        hls_master_path: row.hls_master_path,
         created_at: row.created_at,
         updated_at: row.updated_at,
         video_url: row.video_url,
@@ -377,7 +471,8 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
-        audios: (row.track_audios || []).map(toSignedAudio),
+        audios: mapRowAudios(row),
+        external_refs: row.track_external_refs || null,
     }));
     return { items, total: count };
 }
@@ -391,12 +486,17 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, duration, created_at,
+            track_id, title, duration, created_at, album_id,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!inner(
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
                 )
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('is_published', true)
@@ -411,6 +511,10 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
         title: row.title,
         duration: row.duration,
         created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
         hls: {
             master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
             variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
@@ -420,6 +524,7 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
+        external_refs: row.track_external_refs || null
     }));
     return { items, total: count };
 }

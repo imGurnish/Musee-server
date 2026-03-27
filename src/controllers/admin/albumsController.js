@@ -2,6 +2,17 @@ const createError = require('http-errors');
 const { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum } = require('../../models/albumModel');
 const { createAlbumArtist, updateAlbumArtistByPair, deleteAlbumArtistByPair } = require('../../models/albumArtistsModel');
 const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
+const { isUUID, validateArtistRoles } = require('../../utils/validators');
+const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
+
+function parseJsonMaybe(value) {
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch (_) {
+        return value;
+    }
+}
 
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
@@ -14,6 +25,7 @@ async function list(req, res) {
 
 async function getOne(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const item = await getAlbum(id);
     if (!item) throw createError(404, 'Album not found');
     res.json(item);
@@ -22,14 +34,64 @@ async function getOne(req, res) {
 async function create(req, res) {
     // Admin must provide artist_id for album ownership
     const payload = { ...req.body };
+    payload.external_payload = parseJsonMaybe(payload.external_payload);
+    const providerCode = payload.source || 'jiosaavn';
+    const extAlbumId = payload.ext_album_id || payload.external_id || null;
     const artist_id = payload.artist_id;
     if (!artist_id) {
         return res.status(400).json({ message: 'artist_id is required' });
     }
 
-    const album = await createAlbum(payload);
-    // Link required owner
-    await createAlbumArtist(album.album_id, artist_id, 'owner');
+    if (extAlbumId) {
+        const providerId = await getProviderId(providerCode);
+        const existingAlbumId = await findEntityIdByExternalId({
+            refTable: 'album_external_refs',
+            entityIdColumn: 'album_id',
+            providerId,
+            externalId: extAlbumId,
+        });
+
+        if (existingAlbumId) {
+            const existingAlbum = await getAlbum(existingAlbumId);
+            await upsertExternalRef({
+                refTable: 'album_external_refs',
+                entityIdColumn: 'album_id',
+                entityId: existingAlbumId,
+                providerId,
+                externalId: extAlbumId,
+                externalUrl: payload.album_url || payload.perma_url || payload.external_url || null,
+                imageUrl: payload.image || payload.cover_url || null,
+                rawPayload: payload.external_payload || null,
+            });
+            return res.status(200).json(existingAlbum);
+        }
+    }
+
+    let album;
+    try {
+        album = await createAlbum(payload);
+        // Link required owner
+        await createAlbumArtist(album.album_id, artist_id, 'owner');
+    } catch (error) {
+        if (album?.album_id) {
+            try { await deleteAlbum(album.album_id); } catch (_) { }
+        }
+        throw error;
+    }
+
+    if (extAlbumId) {
+        const providerId = await getProviderId(providerCode);
+        await upsertExternalRef({
+            refTable: 'album_external_refs',
+            entityIdColumn: 'album_id',
+            entityId: album.album_id,
+            providerId,
+            externalId: extAlbumId,
+            externalUrl: payload.album_url || payload.perma_url || payload.external_url || null,
+            imageUrl: payload.image || payload.cover_url || null,
+            rawPayload: payload.external_payload || null,
+        });
+    }
 
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(album.album_id, req.file);
@@ -42,8 +104,6 @@ async function create(req, res) {
 }
 
 // Manage album artists (admin)
-const { isUUID, validateArtistRoles } = require('../../utils/validators');
-
 async function addArtist(req, res) {
     const { id: album_id } = req.params;
     const { artist_id, role = 'viewer' } = req.body || {};
@@ -75,6 +135,7 @@ async function removeArtist(req, res) {
 
 async function update(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const payload = { ...req.body };
     if (req.file) {
         const coverUrl = await uploadAlbumCoverToStorage(id, req.file);
@@ -86,6 +147,7 @@ async function update(req, res) {
 
 async function remove(req, res) {
     const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid album id');
     const album = await getAlbum(id);
     if (!album) {
         return res.status(404).json({ message: 'Album not found' });
