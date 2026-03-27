@@ -160,6 +160,10 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
             ),
             track_assets:track_assets!track_assets_track_id_fkey(
                 track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .order('created_at', { ascending: false });
@@ -206,6 +210,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
         audios: mapRowAudios(row),
+        external_refs: row.track_external_refs || null,
     }));
     return { items, total: count };
 }
@@ -225,6 +230,10 @@ async function getTrack(track_id) {
             ),
             track_assets:track_assets!track_assets_track_id_fkey(
                 track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `)
         .eq('track_id', track_id)
@@ -268,6 +277,7 @@ async function getTrack(track_id) {
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
         audios: mapRowAudios(data),
+        external_refs: data.track_external_refs || null
     };
 }
 
@@ -305,6 +315,10 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
                 )
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('is_published', true)
@@ -331,6 +345,7 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
+        external_refs: row.track_external_refs || null
     }));
     return { items, total: count };
 }
@@ -349,6 +364,10 @@ async function getTrackUser(track_id) {
             ),
             track_assets:track_assets!track_assets_track_id_fkey(
                 track_asset_id, ext, bitrate_kbps, file_path, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `)
         .eq('track_id', track_id)
@@ -379,6 +398,7 @@ async function getTrackUser(track_id) {
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
         audios: mapRowAudios(data).map(a => ({ ext: a.ext, bitrate: a.bitrate, path: a.path })),
+        external_refs: data.track_external_refs || null
     };
 }
 
@@ -402,6 +422,10 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
             ),
             track_assets:track_assets!track_assets_track_id_fkey(
                 track_asset_id, ext, bitrate_kbps, file_path, created_at, asset_type
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('track_artists.artist_id', artist_id)
@@ -448,6 +472,7 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
         audios: mapRowAudios(row),
+        external_refs: row.track_external_refs || null,
     }));
     return { items, total: count };
 }
@@ -468,6 +493,10 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
                 )
+            ),
+            track_external_refs!track_external_refs_track_id_fkey(
+                external_id,
+                provider_id
             )
         `, { count: 'exact' })
         .eq('is_published', true)
@@ -495,6 +524,7 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
+        external_refs: row.track_external_refs || null
     }));
     return { items, total: count };
 }

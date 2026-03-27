@@ -5,6 +5,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const crypto = require('crypto');
 const logger = require('../../utils/logger');
 const { supabaseAdmin } = require('../../db/config');
 const { executeTransaction, createAndTrack, updateAndTrack } = require('../../utils/transaction');
@@ -205,6 +206,185 @@ async function fetchSaavn(callName, params = {}) {
   return { url, data };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(retryAfterHeader) {
+  if (!retryAfterHeader) return null;
+
+  const asNumber = Number.parseInt(String(retryAfterHeader), 10);
+  if (Number.isFinite(asNumber) && asNumber > 0) return asNumber * 1000;
+
+  const asDate = Date.parse(String(retryAfterHeader));
+  if (Number.isFinite(asDate)) {
+    const delta = asDate - Date.now();
+    return delta > 0 ? delta : null;
+  }
+
+  return null;
+}
+
+function isRetryableMediaError(error) {
+  const status = error?.response?.status;
+  if (status === 429) return true;
+  if (status >= 500 && status < 600) return true;
+  return Boolean(error?.code);
+}
+
+async function fetchMediaWithRetry(url, { maxAttempts = 5 } = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 60000,
+        headers: {
+          Accept: 'audio/*,*/*;q=0.8',
+          Referer: 'https://www.jiosaavn.com/',
+          Origin: 'https://www.jiosaavn.com',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+    } catch (error) {
+      lastError = error;
+
+      if (!isRetryableMediaError(error) || attempt >= maxAttempts) {
+        break;
+      }
+
+      const retryAfter = parseRetryAfterMs(error?.response?.headers?.['retry-after']);
+      const backoffMs = retryAfter || Math.min(15000, 1000 * (2 ** (attempt - 1)));
+
+      importLog('warn', 'Media fetch rate-limited/retryable failure, retrying', {
+        attempt,
+        maxAttempts,
+        status: error?.response?.status || null,
+        waitMs: backoffMs
+      });
+
+      await sleep(backoffMs);
+    }
+  }
+
+  throw lastError || new Error('Failed to fetch media');
+}
+
+async function resolveAuthMediaUrlFromEncrypted(encryptedMediaUrl) {
+  if (!encryptedMediaUrl) return null;
+
+  const bitrates = ['320', '160', '96'];
+  for (const bitrate of bitrates) {
+    try {
+      const { data } = await fetchSaavn('song.generateAuthToken', {
+        url: encryptedMediaUrl,
+        bitrate
+      });
+
+      const authUrl = safeText(
+        data?.auth_url || data?.authUrl || data?.url,
+        null
+      );
+
+      if (authUrl) {
+        importLog('info', 'Resolved auth media URL from encrypted media', { bitrate });
+        return authUrl;
+      }
+    } catch (error) {
+      importLog('warn', 'Failed to resolve auth media URL for bitrate', {
+        bitrate,
+        reason: error?.message || 'unknown error'
+      });
+    }
+  }
+
+  return null;
+}
+
+function decryptSaavnMediaUrl(encryptedMediaUrl) {
+  if (!encryptedMediaUrl || typeof encryptedMediaUrl !== 'string') return null;
+
+  try {
+    const normalized = encryptedMediaUrl.trim().replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const encryptedBuffer = Buffer.from(padded, 'base64');
+
+    const decipher = crypto.createDecipheriv('des-ecb', Buffer.from('38346591', 'utf8'), null);
+    decipher.setAutoPadding(true);
+
+    const decrypted = Buffer.concat([
+      decipher.update(encryptedBuffer),
+      decipher.final()
+    ]).toString('utf8').trim();
+
+    if (!decrypted) return null;
+    return decrypted.startsWith('http') ? decrypted : `https://${decrypted}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildBitrateVariantUrls(baseUrl) {
+  if (!baseUrl || typeof baseUrl !== 'string') return [];
+
+  const variants = [];
+  const bitrates = ['320', '160', '96'];
+
+  for (const bitrate of bitrates) {
+    const replaced = baseUrl.replace(/_(\d{2,3})\.mp4(\?.*)?$/i, `_${bitrate}.mp4$2`);
+    variants.push(replaced);
+  }
+
+  return Array.from(new Set(variants));
+}
+
+async function fetchTrackMediaForIngest({ encryptedMediaUrl }) {
+  const candidates = [];
+
+  const decryptedUrl = decryptSaavnMediaUrl(encryptedMediaUrl);
+  if (decryptedUrl) {
+    for (const url of buildBitrateVariantUrls(decryptedUrl)) {
+      candidates.push({ source: 'encrypted_des_url', url, maxAttempts: 3 });
+    }
+  }
+
+  const authUrl = await resolveAuthMediaUrlFromEncrypted(encryptedMediaUrl);
+  if (authUrl) {
+    candidates.push({ source: 'encrypted_auth_url', url: authUrl, maxAttempts: 3 });
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('No media URL resolved from encrypted media');
+  }
+
+  let lastError = null;
+
+  for (const candidate of candidates) {
+    try {
+      importLog('info', 'Attempting media fetch candidate', {
+        source: candidate.source,
+        maxAttempts: candidate.maxAttempts
+      });
+
+      const response = await fetchMediaWithRetry(candidate.url, {
+        maxAttempts: candidate.maxAttempts
+      });
+
+      importLog('info', 'Media fetch candidate succeeded', { source: candidate.source });
+      return response;
+    } catch (error) {
+      lastError = error;
+      importLog('warn', 'Media fetch candidate failed', {
+        source: candidate.source,
+        reason: error?.message || 'unknown error'
+      });
+    }
+  }
+
+  throw lastError || new Error('Unable to fetch media from all candidates');
+}
+
 function firstArtistFromTrack(rawTrack) {
   const primaryNames = splitCsv(
     rawTrack?.primary_artists ||
@@ -356,14 +536,14 @@ function normalizePlaylistPayload(rawData, playlistId) {
   };
 }
 
-function createJob({ type, sourceId, trackDownload, requestedBy }) {
+function createJob({ type, sourceId, requestedBy }) {
   const jobId = uuidv4();
   const now = new Date().toISOString();
   const job = {
     jobId,
     type,
     sourceId,
-    trackDownload,
+    trackDownload: true,
     requestedBy: requestedBy || null,
     status: 'queued',
     progress: 0,
@@ -376,7 +556,7 @@ function createJob({ type, sourceId, trackDownload, requestedBy }) {
   };
 
   importJobs.set(jobId, job);
-  importLog('info', 'Created import job', { jobId, type, sourceId, trackDownload, requestedBy: requestedBy || null });
+  importLog('info', 'Created import job', { jobId, type, sourceId, trackDownload: true, requestedBy: requestedBy || null });
   return job;
 }
 
@@ -700,8 +880,97 @@ async function ensureTrackArtistLink(trackId, artistId, role = 'owner') {
   return true;
 }
 
+async function trackHasIngestedAudio(trackId) {
+  const [trackRow, assetCountResp] = await Promise.all([
+    supabaseAdmin
+      .from('tracks')
+      .select('hls_master_path')
+      .eq('track_id', trackId)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('track_assets')
+      .select('track_asset_id', { count: 'exact', head: true })
+      .eq('track_id', trackId)
+      .eq('asset_type', 'audio_progressive')
+  ]);
+
+  if (trackRow.error) throw trackRow.error;
+  if (assetCountResp.error) throw assetCountResp.error;
+
+  const hasHls = Boolean(trackRow.data?.hls_master_path);
+  const progressiveCount = assetCountResp.count || 0;
+  return hasHls && progressiveCount > 0;
+}
+
+async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackId, jobId }) {
+  if (!encryptedMediaUrl) {
+    throw new Error(`Missing encrypted media URL for track ${sourceTrackId || trackId}`);
+  }
+
+  if (jobId) {
+    updateJob(jobId, { progress: Math.max(96, importJobs.get(jobId)?.progress || 96) });
+  }
+
+  importLog('info', 'Starting track asset processing from encrypted media', {
+    trackId: sourceTrackId || trackId,
+    dbTrackId: trackId
+  });
+
+  const mediaResp = await fetchTrackMediaForIngest({ encryptedMediaUrl });
+  const contentType = mediaResp.headers['content-type'] || 'audio/mp4';
+  const extension = contentType.includes('mpeg')
+    ? 'mp3'
+    : contentType.includes('mp4') || contentType.includes('aac')
+      ? 'm4a'
+      : 'bin';
+
+  const processResult = await processAudioBuffer({
+    originalname: `track_${trackId}.${extension}`,
+    mimetype: contentType,
+    buffer: Buffer.from(mediaResp.data)
+  }, trackId);
+
+  importLog('info', 'processAudioBuffer completed', {
+    trackId: sourceTrackId || trackId,
+    dbTrackId: trackId,
+    progressiveCount: Object.keys(processResult.files || {}).length,
+    hasHlsMaster: Boolean(processResult.hls?.master)
+  });
+
+  if (!processResult.hls?.master) {
+    throw new Error(`HLS master playlist was not generated for track ${sourceTrackId || trackId}`);
+  }
+
+  const fileEntries = Object.values(processResult.files || {}).filter(Boolean);
+  const assetTx = await executeTransaction(async (tracker) => {
+    for (const filePath of fileEntries) {
+      const fileName = String(filePath).split('/').pop() || '';
+      const bitrateMatch = fileName.match(/_(\d+)k\./);
+      const bitrate = bitrateMatch ? Number.parseInt(bitrateMatch[1], 10) : processResult.bitrate || 128;
+      const ext = (fileName.split('.').pop() || 'mp3').toLowerCase();
+      await addTrackAudio(trackId, ext, bitrate, filePath);
+    }
+
+    await updateAndTrack(
+      tracker,
+      'tracks',
+      { hls_master_path: processResult.hls.master },
+      'track_id',
+      trackId
+    );
+  }, { operationName: `Track asset ingest ${trackId}` });
+
+  if (!assetTx.success) {
+    throw new Error(assetTx.error || 'Track asset ingest transaction failed');
+  }
+
+  if (jobId) {
+    updateJob(jobId, { progress: Math.max(99, importJobs.get(jobId)?.progress || 99) });
+  }
+}
+
 async function importTrackById(trackId, options = {}) {
-  importLog('info', 'importTrackById started', { trackId, forcedAlbumId: options.forcedAlbumId || null, trackDownload: options.trackDownload === true });
+  importLog('info', 'importTrackById started', { trackId, forcedAlbumId: options.forcedAlbumId || null, trackDownload: true });
   const providerId = await getProviderId('jiosaavn');
 
   const existingTrackId = await findEntityIdByExternalId({
@@ -746,7 +1015,22 @@ async function importTrackById(trackId, options = {}) {
       targetAlbumId
     });
 
-    return { trackId: existingTrackId, created: false, downloaded: false };
+    const alreadyIngested = await trackHasIngestedAudio(existingTrackId);
+    if (!alreadyIngested) {
+      await ingestTrackAudioAssets({
+        trackId: existingTrackId,
+        encryptedMediaUrl: normalized.downloadUrl,
+        sourceTrackId: trackId,
+        jobId: options.jobId
+      });
+    }
+
+    return {
+      trackId: existingTrackId,
+      created: false,
+      downloaded: true,
+      audioAlreadyPresent: alreadyIngested
+    };
   }
 
   let albumId = options.forcedAlbumId || null;
@@ -831,65 +1115,29 @@ async function importTrackById(trackId, options = {}) {
 
     return {
       trackId: dbTrackId,
-      previewUrl: normalized.previewUrl
+      encryptedMediaUrl: normalized.downloadUrl
     };
   }, { operationName: `Import track ${trackId}` });
 
   if (!tx.success) throw new Error(tx.error || 'Track import failed');
-  importLog('info', 'Track core transaction complete', { trackId, dbTrackId: tx.data.trackId, hasPreview: Boolean(tx.data.previewUrl) });
+  importLog('info', 'Track core transaction complete', {
+    trackId,
+    dbTrackId: tx.data.trackId,
+    hasEncryptedMedia: Boolean(tx.data.encryptedMediaUrl)
+  });
 
-  if (options.trackDownload === true && tx.data.previewUrl) {
-    try {
-      const mediaResp = await axios.get(tx.data.previewUrl, {
-        responseType: 'arraybuffer',
-        timeout: 60000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
+  await ingestTrackAudioAssets({
+    trackId: tx.data.trackId,
+    encryptedMediaUrl: tx.data.encryptedMediaUrl,
+    sourceTrackId: trackId,
+    jobId: options.jobId
+  });
 
-      const contentType = mediaResp.headers['content-type'] || 'audio/mp4';
-      const extension = contentType.includes('mpeg') ? 'mp3' : contentType.includes('mp4') ? 'm4a' : 'bin';
-
-      const processResult = await processAudioBuffer({
-        originalname: `track_${tx.data.trackId}.${extension}`,
-        mimetype: contentType,
-        buffer: Buffer.from(mediaResp.data)
-      }, tx.data.trackId);
-
-      await executeTransaction(async (tracker) => {
-        const fileEntries = Object.values(processResult.files || {});
-        for (const filePath of fileEntries) {
-          const fileName = String(filePath).split('/').pop() || '';
-          const bitrateMatch = fileName.match(/_(\d+)k\./);
-          const bitrate = bitrateMatch ? Number.parseInt(bitrateMatch[1], 10) : processResult.bitrate || 128;
-          const ext = (fileName.split('.').pop() || 'mp3').toLowerCase();
-          await addTrackAudio(tx.data.trackId, ext, bitrate, filePath);
-        }
-
-        if (processResult.hls?.master) {
-          await updateAndTrack(
-            tracker,
-            'tracks',
-            { hls_master_path: processResult.hls.master },
-            'track_id',
-            tx.data.trackId
-          );
-        }
-      }, { operationName: `Track asset ingest ${tx.data.trackId}` });
-
-      return { trackId: tx.data.trackId, created: true, downloaded: true };
-    } catch (assetError) {
-      importLog('warn', 'Track asset download/process skipped', { trackId, reason: assetError.message });
-      return { trackId: tx.data.trackId, created: true, downloaded: false, warning: assetError.message };
-    }
-  }
-
-  return { trackId: tx.data.trackId, created: true, downloaded: false };
+  return { trackId: tx.data.trackId, created: true, downloaded: true };
 }
 
 async function importAlbumById(albumId, options = {}) {
-  importLog('info', 'importAlbumById started', { albumId, trackDownload: options.trackDownload === true });
+  importLog('info', 'importAlbumById started', { albumId, trackDownload: true });
   const albumShell = await ensureAlbumImportedShell(albumId, options);
 
   const { data: remoteAlbum } = await fetchSaavn('content.getAlbumDetails', { albumid: albumId });
@@ -919,7 +1167,7 @@ async function importAlbumById(albumId, options = {}) {
 }
 
 async function importPlaylistById(playlistId, options = {}) {
-  importLog('info', 'importPlaylistById started', { playlistId, trackDownload: options.trackDownload === true });
+  importLog('info', 'importPlaylistById started', { playlistId, trackDownload: true });
   const providerId = await getProviderId('jiosaavn');
 
   const existingPlaylistId = await findEntityIdByExternalId({
@@ -1042,18 +1290,15 @@ async function runImportJob(job) {
       result = await importArtistById(job.sourceId, { jobId: job.jobId });
     } else if (job.type === 'album') {
       result = await importAlbumById(job.sourceId, {
-        jobId: job.jobId,
-        trackDownload: job.trackDownload
+        jobId: job.jobId
       });
     } else if (job.type === 'track') {
       result = await importTrackById(job.sourceId, {
-        jobId: job.jobId,
-        trackDownload: job.trackDownload
+        jobId: job.jobId
       });
     } else if (job.type === 'playlist') {
       result = await importPlaylistById(job.sourceId, {
         jobId: job.jobId,
-        trackDownload: job.trackDownload,
         adminId: job.requestedBy
       });
     } else {
@@ -1080,22 +1325,14 @@ async function runImportJob(job) {
   }
 }
 
-function parseTrackDownloadFlag(value) {
-  if (value === true || value === 'true' || value === '1') return true;
-  if (value === false || value === 'false' || value === '0') return false;
-  return false;
-}
-
 function enqueueImport(req, res, type, sourceId) {
   if (!sourceId || String(sourceId).trim().length === 0) {
     return res.status(400).json({ error: `${type} id is required` });
   }
 
-  const trackDownload = parseTrackDownloadFlag(req.query.track_download ?? req.query.trackDownload ?? req.body?.track_download ?? req.body?.trackDownload);
   const job = createJob({
     type,
     sourceId: String(sourceId).trim(),
-    trackDownload,
     requestedBy: req.user?.id || null
   });
 
@@ -1104,7 +1341,7 @@ function enqueueImport(req, res, type, sourceId) {
   importLog('info', 'Queued import request from API', {
     routeType: type,
     sourceId: String(sourceId).trim(),
-    trackDownload,
+    trackDownload: true,
     requestedBy: req.user?.id || null,
     jobId: job.jobId
   });
@@ -1115,7 +1352,7 @@ function enqueueImport(req, res, type, sourceId) {
     jobId: job.jobId,
     type: job.type,
     sourceId: job.sourceId,
-    trackDownload: job.trackDownload,
+    trackDownload: true,
     status: job.status
   });
 }
