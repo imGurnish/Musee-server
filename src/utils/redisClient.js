@@ -15,7 +15,7 @@ async function getRedisClient() {
   const url = getRedisUrlFromEnv();
   client = createClient({ url });
   client.on('error', (err) => {
-    // console.error('Redis Client Error', err);
+    console.error('Redis Client Error', err);
   });
   await client.connect();
   return client;

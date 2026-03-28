@@ -7,7 +7,8 @@ const { listTracks, getTrack, createTrack, updateTrack, deleteTrack } = require(
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { getAlbum } = require('../../models/albumModel');
-const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
+const { uploadTrackVideoToStorage } = require('../../utils/supabaseStorage');
+const { cleanupSingleTrackBlobs } = require('../../utils/trackBlobCleanup');
 const { isUUID } = require('../../utils/validators');
 const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
 
@@ -384,11 +385,48 @@ async function remove(req, res) {
     if (!isUUID(id)) throw createError(400, 'invalid track id');
     const track = await getTrack(id);
     if (!track) throw createError(404, 'Track not found');
-    await deleteTrackVideoFromStorage(track.track_id, track.video_url)
-    // delete audio DB rows; blob deletion is managed by storage lifecycle if any
+
+    await cleanupSingleTrackBlobs({
+        trackId: track.track_id,
+        videoUrl: track.video_url,
+    });
+
     await deleteAudiosForTrack(id);
     await deleteTrack(id);
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove };
+async function removeMany(req, res) {
+    const idsInput = req.body?.ids;
+    if (!Array.isArray(idsInput) || idsInput.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+
+    const ids = [...new Set(idsInput.map((v) => String(v).trim()).filter(Boolean))];
+    if (!ids.every(isUUID)) {
+        throw createError(400, 'all ids must be valid UUIDs');
+    }
+
+    let deleted = 0;
+    const notFound = [];
+
+    for (const id of ids) {
+        const track = await getTrack(id);
+        if (!track) {
+            notFound.push(id);
+            continue;
+        }
+
+        await cleanupSingleTrackBlobs({
+            trackId: track.track_id,
+            videoUrl: track.video_url,
+        });
+        await deleteAudiosForTrack(id);
+        await deleteTrack(id);
+        deleted += 1;
+    }
+
+    res.json({ deleted, notFound });
+}
+
+module.exports = { list, getOne, create, update, remove, removeMany };
