@@ -22,7 +22,14 @@ function normalizeExternalTrackId(trackId) {
   if (!trackId || typeof trackId !== 'string') return '';
   const raw = trackId.trim();
   if (raw.includes(':')) {
-    return raw.split(':').pop()?.trim() || raw;
+    const parts = raw
+      .split(':')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0]}:${parts[parts.length - 1]}`;
+    }
+    return parts[0] || raw;
   }
   return raw;
 }
@@ -30,14 +37,23 @@ function normalizeExternalTrackId(trackId) {
 async function resolveTrackIdForHistory(trackId) {
   if (isUuid(trackId)) return trackId;
 
-  const externalId = normalizeExternalTrackId(trackId);
-  if (!externalId) return null;
+  const rawExternalId = typeof trackId === 'string' ? trackId.trim() : '';
+  const normalizedExternalId = normalizeExternalTrackId(trackId);
+  if (!normalizedExternalId && !rawExternalId) return null;
+
+  const candidates = [
+    rawExternalId,
+    normalizedExternalId,
+    rawExternalId.includes(':')
+      ? rawExternalId.split(':').pop()?.trim()
+      : rawExternalId,
+  ].filter(Boolean);
 
   try {
     const { data: mapped } = await supabase
       .from('track_external_refs')
       .select('track_id')
-      .eq('external_id', externalId)
+      .in('external_id', candidates)
       .limit(1)
       .maybeSingle();
 
@@ -94,10 +110,10 @@ exports.logTrackPlay = async (req, res) => {
 
     const resolvedTrackId = await resolveTrackIdForHistory(trackId);
     if (!resolvedTrackId) {
-      return res.status(202).json({
+      return res.status(404).json({
         success: false,
-        skipped: true,
-        message: 'Track is not mapped to internal catalog yet',
+        code: 'TRACK_NOT_MAPPED',
+        message: 'Track is not mapped to internal catalog',
       });
     }
 
@@ -123,8 +139,8 @@ exports.logTrackPlay = async (req, res) => {
     // Update artist/album listening history (aggregate)
     await updateAggregateListeningStats(userId, resolvedTrackId, timeListenedSeconds);
 
-    // Invalidate recommendation cache if completion % > 70% (strong signal)
-    if (completionPercentage > 70) {
+    // Invalidate recommendation cache for strong positive or negative signals.
+    if (completionPercentage > 70 || wasSkipped || completionPercentage < 50) {
       await invalidateUserRecommendationCache(userId);
     }
 
