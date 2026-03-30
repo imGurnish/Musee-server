@@ -38,6 +38,13 @@ function getBlobSasUrl(blobPath, expiresInSeconds = 3600) {
     return `https://${accountName}.blob.core.windows.net/${containerName}/${blobPath}?${sas}`;
 }
 
+function getBlobSasUrlWithExpiry(blobPath, expiresInSeconds = 3600) {
+    const safeExpirySeconds = Math.max(60, Number(expiresInSeconds) || 3600);
+    const expiresAt = new Date(Date.now() + safeExpirySeconds * 1000).toISOString();
+    const url = getBlobSasUrl(blobPath, safeExpirySeconds);
+    return { url, expiresAt };
+}
+
 function isAbsoluteUrl(u) {
     return typeof u === 'string' && /^https?:\/\//i.test(u);
 }
@@ -52,4 +59,4 @@ function getBlobPublicUrl(blobPath) {
     return `https://${accountName}.blob.core.windows.net/${containerName}/${blobPath}`;
 }
 
-module.exports = { getBlobSasUrl, isAbsoluteUrl, getBlobPublicUrl };
+module.exports = { getBlobSasUrl, getBlobSasUrlWithExpiry, isAbsoluteUrl, getBlobPublicUrl };

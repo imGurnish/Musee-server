@@ -3,6 +3,15 @@ const { getRedisClient } = require('../../utils/redisClient');
 const { listTracksUser, listTracksByIdsUser } = require('../../models/trackModel');
 const { isUUID } = require('../../utils/validators');
 
+const DEFAULT_MIN_QUEUE_SIZE = Math.max(
+  1,
+  Number(process.env.QUEUE_MIN_SIZE || 30),
+);
+const EXTERNAL_METADATA_TTL_SECONDS = Math.max(
+  60,
+  Number(process.env.EXTERNAL_QUEUE_METADATA_TTL_SECONDS || 86400 * 30),
+);
+
 function queueKey(userId) { return `user:queue:${userId}`; }
 function metaKey(trackId) { return `track:meta:${trackId}`; }
 
@@ -48,8 +57,8 @@ async function getQueue(req, res) {
   const userId = req.user?.id;
   if (!userId) throw createError(401, 'Unauthorized');
   const client = await getRedisClient();
-  // Always ensure the queue has at least 10 items while user is listening
-  const ids = await ensureMinQueue(userId, 10);
+  // Always ensure the queue has at least a minimum number of items while listening.
+  const ids = await ensureMinQueue(userId, DEFAULT_MIN_QUEUE_SIZE);
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.json({ items: ids, total: ids.length });
 
@@ -76,7 +85,9 @@ async function getQueue(req, res) {
       if (json) {
         try {
           extMap.set(id, JSON.parse(json));
-        } catch (e) { }
+        } catch (e) {
+          console.warn(`[QUEUE] Failed to parse external metadata for ${id}:`, e?.message || e);
+        }
       }
     });
   }
@@ -122,10 +133,14 @@ async function addToQueue(req, res) {
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     if (!isUUID(id) && i < metas.length && metas[i]) {
-      await client.set(metaKey(id), JSON.stringify(metas[i]), { EX: 86400 * 7 }); // 7 days expiry
+      await client.set(metaKey(id), JSON.stringify(metas[i]), {
+        EX: EXTERNAL_METADATA_TTL_SECONDS,
+      });
     } else if (!isUUID(id) && req.body.metadata && ids.length === 1) {
       // Single add with metadata
-      await client.set(metaKey(id), JSON.stringify(req.body.metadata), { EX: 86400 * 7 });
+      await client.set(metaKey(id), JSON.stringify(req.body.metadata), {
+        EX: EXTERNAL_METADATA_TTL_SECONDS,
+      });
     }
   }
 
@@ -144,7 +159,7 @@ async function removeFromQueue(req, res) {
   const { track_id } = req.params;
   const client = await getRedisClient();
   const removed = await client.lRem(queueKey(userId), 1, String(track_id));
-  const ids = await ensureMinQueue(userId, 10);
+  const ids = await ensureMinQueue(userId, DEFAULT_MIN_QUEUE_SIZE);
   res.json({ ok: true, removed, total: ids.length });
 }
 
@@ -190,7 +205,9 @@ async function playTrack(req, res) {
 
   // Store metadata if external
   if (!isUUID(startId) && metadata) {
-    await client.set(metaKey(startId), JSON.stringify(metadata), { EX: 86400 * 7 });
+    await client.set(metaKey(startId), JSON.stringify(metadata), {
+      EX: EXTERNAL_METADATA_TTL_SECONDS,
+    });
   }
 
   // Only init queue with the requested track.
@@ -201,8 +218,8 @@ async function playTrack(req, res) {
   await client.del(key);
   await client.rPush(key, fullQueue);
 
-  // Ensure minimum size in case we couldn't gather 10 unique
-  const ensured = await ensureMinQueue(userId, 10);
+  // Ensure minimum queue size in case we couldn't gather enough unique tracks.
+  const ensured = await ensureMinQueue(userId, DEFAULT_MIN_QUEUE_SIZE);
 
   const expand = req.query.expand === '1' || req.query.expand === 'true';
   if (!expand) return res.status(201).json({ items: ensured, total: ensured.length });
@@ -229,7 +246,9 @@ async function playTrack(req, res) {
       if (json) {
         try {
           extMap.set(id, JSON.parse(json));
-        } catch (e) { }
+        } catch (e) {
+          console.warn(`[QUEUE] Failed to parse external metadata for ${id}:`, e?.message || e);
+        }
       }
     });
   }

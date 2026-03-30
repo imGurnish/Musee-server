@@ -18,8 +18,13 @@ const queueKey = (userId) => `user:queue:${userId}`;
 const queuePrefsKey = (userId) => `user:queue:prefs:${userId}`;
 const queueMetaKey = (trackId) => `track:meta:${trackId}`;
 
+const DEFAULT_MIN_QUEUE_SIZE = Math.max(
+  1,
+  Number(process.env.QUEUE_MIN_SIZE || 30),
+);
+
 const DEFAULT_QUEUE_PREFS = {
-  minQueueSize: 30,
+  minQueueSize: DEFAULT_MIN_QUEUE_SIZE,
   smartFillThreshold: 10,
   preferredRecommendationType: 'discovery',
   allowRepeatTracks: false,
@@ -104,7 +109,7 @@ exports.smartFillQueue = async (req, res) => {
     const userId = req.user?.id;
     if (!userId) throw createError(401, 'Unauthorized');
 
-    const { type = 'discovery', limit = 20 } = req.body || {};
+    const { type = 'discovery', limit = 20, forceFill = false } = req.body || {};
     const client = await getRedisClient();
 
     // Get current queue
@@ -116,7 +121,7 @@ exports.smartFillQueue = async (req, res) => {
     const prefs = prefsData ? JSON.parse(prefsData) : DEFAULT_QUEUE_PREFS;
 
     // If queue is healthy, don't fill
-    if (currentQueue.length >= prefs.minQueueSize) {
+    if (!forceFill && currentQueue.length >= prefs.minQueueSize) {
       return res.json({
         success: true,
         message: 'Queue is already full',
@@ -162,9 +167,13 @@ exports.smartFillQueue = async (req, res) => {
 
       const dislikedSet = new Set(disliked?.map(d => d.track_id) || []);
 
+      const maxToAdd = forceFill
+        ? Math.max(1, Number(limit) || 20)
+        : Math.max(0, prefs.minQueueSize - currentQueue.length);
+
       let toAdd = trackIds
         .filter(id => !queueSet.has(id) && !dislikedSet.has(id))
-        .slice(0, prefs.minQueueSize - currentQueue.length);
+        .slice(0, maxToAdd);
 
       if (!toAdd.length) {
         return res.json({

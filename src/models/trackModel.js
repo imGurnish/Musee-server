@@ -1,5 +1,5 @@
 const { supabase, supabaseAdmin } = require('../db/config');
-const { getBlobSasUrl, isAbsoluteUrl, getBlobPublicUrl } = require('../utils/azureSas');
+const { getBlobSasUrl, getBlobSasUrlWithExpiry, isAbsoluteUrl, getBlobPublicUrl } = require('../utils/azureSas');
 const { isUUID } = require('../utils/validators');
 const { toNum } = require('../utils/typeConversions');
 
@@ -34,6 +34,36 @@ function toSignedAudioFromAsset(asset) {
 
 function mapRowAudios(row) {
     return (row.track_assets || []).map(toSignedAudioFromAsset).filter(Boolean);
+}
+
+function buildHlsPayload(trackId) {
+    try {
+        const master = getBlobSasUrlWithExpiry(`hls/track_${trackId}/master.m3u8`);
+        const variants = [96, 160, 320].map((kb) => {
+            const signed = getBlobSasUrlWithExpiry(`hls/track_${trackId}/v${kb}/index.m3u8`);
+            return {
+                bitrate: kb,
+                url: signed.url,
+                expires_at: signed.expiresAt,
+            };
+        });
+
+        return {
+            master: master.url,
+            master_expires_at: master.expiresAt,
+            variants,
+        };
+    } catch (_) {
+        return {
+            master: getBlobPublicUrl(`hls/track_${trackId}/master.m3u8`),
+            master_expires_at: null,
+            variants: [96, 160, 320].map((kb) => ({
+                bitrate: kb,
+                url: getBlobPublicUrl(`hls/track_${trackId}/v${kb}/index.m3u8`),
+                expires_at: null,
+            })),
+        };
+    }
 }
 
 // helpers are imported from validators/typeConversions
@@ -198,11 +228,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
         updated_at: row.updated_at,
         video_url: row.video_url,
         is_published: row.is_published,
-        // Public HLS URLs (container must be public)
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             role: ta?.role || null,
@@ -266,10 +292,7 @@ async function getTrack(track_id) {
         updated_at: data.updated_at,
         video_url: data.video_url,
         is_published: data.is_published,
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${data.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${data.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(data.track_id),
         artists: (data.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             role: ta?.role || null,
@@ -336,10 +359,7 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
             title: row.albums?.title,
             cover_url: row.albums?.cover_url,
         },
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             name: ta?.artists?.users?.name || null,
@@ -388,10 +408,7 @@ async function getTrackUser(track_id) {
         is_explicit: data.is_explicit,
         likes_count: data.likes_count,
         created_at: data.created_at,
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${data.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${data.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(data.track_id),
         artists: (data.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             name: ta?.artists?.users?.name || null,
@@ -461,10 +478,7 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
         updated_at: row.updated_at,
         video_url: row.video_url,
         is_published: row.is_published,
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             role: ta?.role || null,
@@ -515,10 +529,7 @@ async function listTracksByArtistUser({ artist_id, limit = 20, offset = 0, q } =
             title: row.albums?.title,
             cover_url: row.albums?.cover_url,
         },
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             name: ta?.artists?.users?.name || null,
@@ -559,10 +570,7 @@ async function listTracksByIdsUser(trackIds = []) {
             title: row.albums?.title,
             cover_url: row.albums?.cover_url,
         },
-        hls: {
-            master: getBlobPublicUrl(`hls/track_${row.track_id}/master.m3u8`),
-            variants: [96, 160, 320].map(kb => ({ bitrate: kb, url: getBlobPublicUrl(`hls/track_${row.track_id}/v${kb}/index.m3u8`) }))
-        },
+        hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             name: ta?.artists?.users?.name || null,

@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { listAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum } = require('../../models/albumModel');
 const { createAlbumArtist, updateAlbumArtistByPair, deleteAlbumArtistByPair } = require('../../models/albumArtistsModel');
 const { uploadAlbumCoverToStorage, deleteAlbumCoverFromStorage } = require('../../utils/supabaseStorage');
+const { cleanupAlbumTrackBlobs } = require('../../utils/trackBlobCleanup');
 const { isUUID, validateArtistRoles } = require('../../utils/validators');
 const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
 
@@ -152,9 +153,49 @@ async function remove(req, res) {
     if (!album) {
         return res.status(404).json({ message: 'Album not found' });
     }
-    await deleteAlbumCoverFromStorage(id, album.cover_url);
+
+    await cleanupAlbumTrackBlobs(id);
+    if (album.cover_url) {
+        const removed = await deleteAlbumCoverFromStorage(id, album.cover_url);
+        if (!removed) throw createError(500, 'Failed to delete album cover from storage');
+    }
+
     await deleteAlbum(id);
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove, addArtist, updateArtist, removeArtist };
+async function removeMany(req, res) {
+    const idsInput = req.body?.ids;
+    if (!Array.isArray(idsInput) || idsInput.length === 0) {
+        throw createError(400, 'ids array is required');
+    }
+
+    const ids = [...new Set(idsInput.map((v) => String(v).trim()).filter(Boolean))];
+    if (!ids.every(isUUID)) {
+        throw createError(400, 'all ids must be valid UUIDs');
+    }
+
+    let deleted = 0;
+    const notFound = [];
+
+    for (const id of ids) {
+        const album = await getAlbum(id);
+        if (!album) {
+            notFound.push(id);
+            continue;
+        }
+
+        await cleanupAlbumTrackBlobs(id);
+        if (album.cover_url) {
+            const removed = await deleteAlbumCoverFromStorage(id, album.cover_url);
+            if (!removed) throw createError(500, `Failed to delete album cover from storage for album ${id}`);
+        }
+
+        await deleteAlbum(id);
+        deleted += 1;
+    }
+
+    res.json({ deleted, notFound });
+}
+
+module.exports = { list, getOne, create, update, remove, removeMany, addArtist, updateArtist, removeArtist };

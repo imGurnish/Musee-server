@@ -5,6 +5,7 @@ const ctrl = require('../../controllers/admin/albumsController');
 const uploadCover = require('../../middleware/uploadCover');
 
 router.get('/', ctrl.list);
+router.post('/bulk-delete', ctrl.removeMany);
 router.get('/:id', ctrl.getOne);
 router.post('/', uploadCover, ctrl.create);
 router.patch('/:id', uploadCover, ctrl.update);
