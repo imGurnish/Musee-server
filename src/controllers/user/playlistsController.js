@@ -1,5 +1,15 @@
 const createError = require('http-errors');
-const { listPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist, listPlaylistsUser, getPlaylistUser } = require('../../models/playlistModel');
+const {
+    listPlaylists,
+    getPlaylist,
+    createPlaylist,
+    updatePlaylist,
+    deletePlaylist,
+    listPlaylistsUser,
+    getPlaylistUser,
+    listTrendingPlaylistsUser,
+    listRecommendedPlaylistsUser,
+} = require('../../models/playlistModel');
 const { addPlaylistTrack, removePlaylistTrack } = require('../../models/playlistTracksModel');
 const { uploadPlaylistCoverToStorage, deletePlaylistCoverFromStorage } = require('../../utils/supabaseStorage');
 const { isUUID } = require('../../utils/validators');
@@ -22,6 +32,46 @@ async function list(req, res) {
     const offset = page * limit;
     const { items, total } = await listPlaylistsUser({ limit, offset, q });
     res.json({ items, total, page, limit });
+}
+
+async function listAlias(req, res) {
+    // Alias endpoint used by some clients for explicit list semantics.
+    return list(req, res);
+}
+
+async function search(req, res) {
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const q = (req.query.q || req.query.query || '').trim();
+    const offset = page * limit;
+    const { items, total } = await listPlaylistsUser({ limit, offset, q: q || undefined });
+    res.json({ items, total, page, limit, query: q });
+}
+
+async function recommended(req, res) {
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const q = (req.query.q || req.query.query || '').trim();
+    const mode = (req.query.mode || 'personalized').toString().toLowerCase();
+    const offset = page * limit;
+
+    const isTrendingMode = mode === 'trending';
+    const { items, total } = isTrendingMode
+        ? await listTrendingPlaylistsUser({ limit, offset, q: q || undefined })
+        : await listRecommendedPlaylistsUser({
+            userId: req.user?.id,
+            limit,
+            offset,
+            q: q || undefined,
+        });
+
+    res.json({
+        items,
+        total,
+        page,
+        limit,
+        mode: isTrendingMode ? 'trending' : 'personalized',
+    });
 }
 
 async function getOne(req, res) {
@@ -101,4 +151,15 @@ async function removeTrack(req, res) {
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove, addTrack, removeTrack };
+module.exports = {
+    list,
+    listAlias,
+    search,
+    recommended,
+    getOne,
+    create,
+    update,
+    remove,
+    addTrack,
+    removeTrack,
+};
