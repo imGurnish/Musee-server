@@ -1,5 +1,6 @@
 const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumModel');
 const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
+const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
 
 function parsePagination(query) {
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
@@ -26,28 +27,41 @@ async function madeForYou(req, res) {
     const { limit, page, offset } = parsePagination(req.query);
 
     // Split limit to get a mix
-    const halfLimit = Math.ceil(limit / 2) + 2; // fetch a bit more
+    const perTypeLimit = Math.ceil(limit / 3) + 2; // fetch a bit more per type
 
     // We pass same offset/limit to both for pagination consistency, 
     // although mixing pagination across two tables is tricky. 
     // For simplicity, we just fetch top N new items from both based on page.
 
-    const [albumsRes, tracksRes] = await Promise.all([
-        listAlbumsUser({ limit: halfLimit, offset: Math.floor(offset / 2) }),
-        listTracksUser({ limit: halfLimit, offset: Math.floor(offset / 2) })
+    const subOffset = Math.floor(offset / 3);
+    const [albumsRes, tracksRes, playlistsRes] = await Promise.all([
+        listAlbumsUser({ limit: perTypeLimit, offset: subOffset }),
+        listTracksUser({ limit: perTypeLimit, offset: subOffset }),
+        listRecommendedPlaylistsUser({
+            userId: req.user?.id,
+            limit: perTypeLimit,
+            offset: subOffset,
+        }),
     ]);
 
     // Tag them with type if not already (listTracksUser might not have it)
     const albums = albumsRes.items.map(i => ({ ...i, type: 'album' }));
     const tracks = tracksRes.items.map(i => ({ ...i, type: 'track' }));
+    const playlists = playlistsRes.items.map(i => ({
+        ...i,
+        id: i.playlist_id,
+        type: 'playlist',
+        title: i.name,
+    }));
 
     // Interleave or Shuffle
     // Since it's "Received freshly", let's interleave to ensure variety
     let combined = [];
-    const len = Math.max(albums.length, tracks.length);
+    const len = Math.max(albums.length, tracks.length, playlists.length);
     for (let i = 0; i < len; i++) {
         if (i < albums.length) combined.push(albums[i]);
         if (i < tracks.length) combined.push(tracks[i]);
+        if (i < playlists.length) combined.push(playlists[i]);
     }
 
     // Helper to get image URL for generic item
@@ -66,7 +80,7 @@ async function madeForYou(req, res) {
     const items = combined.slice(0, limit);
 
     // Total is estimate
-    const total = albumsRes.total + tracksRes.total;
+    const total = albumsRes.total + tracksRes.total + playlistsRes.total;
 
     res.json({ items, total, page, limit });
 }
@@ -83,14 +97,21 @@ async function trending(req, res) {
     // If page 1 (offset 20), we want roughly offset 10 from both.
     const subOffset = Math.floor(offset / 2);
 
-    const [albumsRes, tracksRes] = await Promise.all([
+    const [albumsRes, tracksRes, playlistsRes] = await Promise.all([
         listTrendingAlbumsUser({ limit: fetchLimit, offset: subOffset }),
-        listTrendingTracksUser({ limit: fetchLimit, offset: subOffset })
+        listTrendingTracksUser({ limit: fetchLimit, offset: subOffset }),
+        listTrendingPlaylistsUser({ limit: fetchLimit, offset: subOffset }),
     ]);
 
     // items from models already have 'type' set in our new listTrending* functions
     const albums = albumsRes.items;
     const tracks = tracksRes.items;
+    const playlists = playlistsRes.items.map(i => ({
+        ...i,
+        id: i.playlist_id,
+        type: 'playlist',
+        title: i.name,
+    }));
 
     // Ensure track covers are accessible at top level for convenience
     tracks.forEach(t => {
@@ -99,14 +120,15 @@ async function trending(req, res) {
 
     // Interleave
     let combined = [];
-    const len = Math.max(albums.length, tracks.length);
+    const len = Math.max(albums.length, tracks.length, playlists.length);
     for (let i = 0; i < len; i++) {
         if (i < albums.length) combined.push(albums[i]);
         if (i < tracks.length) combined.push(tracks[i]);
+        if (i < playlists.length) combined.push(playlists[i]);
     }
 
     const items = combined.slice(0, limit);
-    const total = albumsRes.total + tracksRes.total;
+    const total = albumsRes.total + tracksRes.total + playlistsRes.total;
 
     res.json({ items, total, page, limit });
 }

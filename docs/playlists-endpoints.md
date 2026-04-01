@@ -47,10 +47,20 @@ Base paths:
 ## User endpoints
 
 - `GET /api/user/playlists` (public only)
+- `GET /api/user/playlists/list` (alias of list)
+- `GET /api/user/playlists/search?q=<query>` (search by playlist name)
+- `GET /api/user/playlists/recommendations?mode=personalized|trending` (playlist recommendations)
 - `GET /api/user/playlists/:id` (public only)
 - `POST /api/user/playlists` (creator from auth user)
 - `PATCH /api/user/playlists/:id` (owner only)
 - `DELETE /api/user/playlists/:id` (owner only)
+
+## Public discovery endpoints
+
+- `GET /api/playlists` (public playlists list/search via `q`)
+- `GET /api/playlists/list` (alias of list)
+- `GET /api/playlists/search?q=<query>` (search by playlist name)
+- `GET /api/playlists/recommendations?mode=personalized|trending` (if no auth user, falls back to trending)
 
 ### User track membership (owner only)
 - `POST /api/user/playlists/:id/tracks` body `{ track_id }`

@@ -88,6 +88,18 @@ try {
     console.warn('Listening routes not mounted:', e?.message || e);
 }
 
+try {
+    const publicPlaylistRoutes = require('./routes/publicPlaylistRoutes');
+    if (typeof publicPlaylistRoutes === 'function' || publicPlaylistRoutes?.stack) {
+        app.use('/api', publicPlaylistRoutes);
+        console.log('Public playlist routes mounted at /api');
+    } else {
+        console.warn('Public playlist routes not mounted: export is not a router');
+    }
+} catch (e) {
+    console.warn('Public playlist routes not mounted:', e?.message || e);
+}
+
 // Hard fallback bindings for critical listening endpoints.
 // These guarantee route availability even if modular router mount is skipped.
 try {
