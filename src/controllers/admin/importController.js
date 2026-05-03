@@ -186,6 +186,11 @@ function safeText(value, fallback = null) {
   return text || fallback;
 }
 
+function toLargeImage(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== 'string') return null;
+  return imageUrl.replace(/50x50/g, '500x500').replace(/150x150/g, '500x500');
+}
+
 async function runWithConcurrency(items, concurrency, worker) {
   const source = Array.isArray(items) ? items : [];
   if (source.length === 0) return [];
@@ -519,7 +524,7 @@ function normalizeTrackPayload(rawData, trackId) {
     trackNumber: toInt(rawSong?.more_info?.label_id || rawSong?.position || rawSong?.track_number, 0) || null,
     albumId,
     albumTitle: safeText(rawSong?.album, null),
-    image: safeText(rawSong?.image || rawSong?.more_info?.image, null),
+    image: toLargeImage(safeText(rawSong?.image || rawSong?.more_info?.image, null)),
     artistExternalId: artist.externalId,
     artistName: artist.name,
     downloadUrl: safeText(rawSong?.encrypted_media_url || rawSong?.more_info?.encrypted_media_url, null),
@@ -535,7 +540,7 @@ function normalizeArtistPayload(rawData, artistId) {
   return {
     id: String(artist?.artistId || artist?.id || artistId || '').trim(),
     name: safeText(artist?.name, 'Unknown Artist'),
-    image: safeText(artist?.image, null),
+    image: toLargeImage(safeText(artist?.image, null)),
     bio: safeText(artist?.bio || artist?.dominantLanguage, 'Imported from JioSaavn')
   };
 }
@@ -556,7 +561,7 @@ function normalizeAlbumPayload(rawData, albumId) {
     id: String(album?.id || album?.albumid || albumId || '').trim(),
     title: safeText(album?.title || album?.name, 'Untitled Album'),
     description: safeText(album?.subtitle || album?.description, 'Imported from JioSaavn'),
-    image: safeText(album?.image, null),
+    image: toLargeImage(safeText(album?.image, null)),
     releaseDate: safeText(album?.release_date, null),
     language: safeText(album?.language, null),
     year: toInt(album?.year, null),
@@ -599,7 +604,7 @@ function normalizePlaylistPayload(rawData, playlistId) {
     id: String(playlist?.listid || playlist?.id || playlistId || '').trim(),
     name: resolvedName,
     description: safeText(playlist?.subtitle || playlist?.description, 'Imported from JioSaavn'),
-    image: safeText(playlist?.image, null),
+    image: toLargeImage(safeText(playlist?.image, null)),
     language: safeText(playlist?.language, null),
     totalTracks: toInt(playlist?.list_count || playlist?.song_count || songs.length, songs.length),
     duration: toInt(playlist?.duration, 0),
