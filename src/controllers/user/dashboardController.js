@@ -34,7 +34,8 @@ async function madeForYou(req, res) {
     // For simplicity, we just fetch top N new items from both based on page.
 
     const subOffset = Math.floor(offset / 3);
-    const [albumsRes, tracksRes, playlistsRes] = await Promise.all([
+    const emptyResult = { items: [], total: 0 };
+    const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
         listAlbumsUser({ limit: perTypeLimit, offset: subOffset }),
         listTracksUser({ limit: perTypeLimit, offset: subOffset }),
         listRecommendedPlaylistsUser({
@@ -43,6 +44,10 @@ async function madeForYou(req, res) {
             offset: subOffset,
         }),
     ]);
+
+    const albumsRes = albumsSettled.status === 'fulfilled' ? albumsSettled.value : emptyResult;
+    const tracksRes = tracksSettled.status === 'fulfilled' ? tracksSettled.value : emptyResult;
+    const playlistsRes = playlistsSettled.status === 'fulfilled' ? playlistsSettled.value : emptyResult;
 
     // Tag them with type if not already (listTracksUser might not have it)
     const albums = albumsRes.items.map(i => ({ ...i, type: 'album' }));
@@ -80,7 +85,7 @@ async function madeForYou(req, res) {
     const items = combined.slice(0, limit);
 
     // Total is estimate
-    const total = albumsRes.total + tracksRes.total + playlistsRes.total;
+    const total = (albumsRes.total || 0) + (tracksRes.total || 0) + (playlistsRes.total || 0);
 
     res.json({ items, total, page, limit });
 }
@@ -97,11 +102,17 @@ async function trending(req, res) {
     // If page 1 (offset 20), we want roughly offset 10 from both.
     const subOffset = Math.floor(offset / 2);
 
-    const [albumsRes, tracksRes, playlistsRes] = await Promise.all([
+    // Use allSettled so one source running out of rows doesn't crash the whole endpoint
+    const emptyResult = { items: [], total: 0 };
+    const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
         listTrendingAlbumsUser({ limit: fetchLimit, offset: subOffset }),
         listTrendingTracksUser({ limit: fetchLimit, offset: subOffset }),
         listTrendingPlaylistsUser({ limit: fetchLimit, offset: subOffset }),
     ]);
+
+    const albumsRes = albumsSettled.status === 'fulfilled' ? albumsSettled.value : emptyResult;
+    const tracksRes = tracksSettled.status === 'fulfilled' ? tracksSettled.value : emptyResult;
+    const playlistsRes = playlistsSettled.status === 'fulfilled' ? playlistsSettled.value : emptyResult;
 
     // items from models already have 'type' set in our new listTrending* functions
     const albums = albumsRes.items;
@@ -128,7 +139,7 @@ async function trending(req, res) {
     }
 
     const items = combined.slice(0, limit);
-    const total = albumsRes.total + tracksRes.total + playlistsRes.total;
+    const total = (albumsRes.total || 0) + (tracksRes.total || 0) + (playlistsRes.total || 0);
 
     res.json({ items, total, page, limit });
 }
