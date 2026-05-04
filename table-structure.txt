@@ -1,203 +1,355 @@
-create table public.users (
-  user_id uuid not null default gen_random_uuid (),
-  name text not null,
-  subscription_type public.subscription_type null default 'free'::subscription_type,
-  plan_id uuid null,
-  avatar_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png'::text,
-  playlists uuid[] null default '{}'::uuid[],
-  favorites jsonb null default '{}'::jsonb,
-  followers_count integer null default 0,
-  followings_count integer null default 0,
-  last_login_at timestamp without time zone null,
-  settings jsonb null default '{}'::jsonb,
-  created_at timestamp without time zone null default now(),
-  updated_at timestamp without time zone null default now(),
-  user_type public.user_type null default 'listener'::user_type,
-  email text not null,
-  constraint users_pkey primary key (user_id),
-  constraint users_email_key unique (email),
-  constraint users_plan_id_fkey foreign KEY (plan_id) references plans (plan_id),
-  constraint users_user_id_fkey foreign KEY (user_id) references auth.users (id) on update CASCADE on delete CASCADE
-) TABLESPACE pg_default;
-
-create table public.artists (
-  artist_id uuid not null default gen_random_uuid (),
-  bio text null,
-  cover_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png'::text,
-  genres text[] null default '{}'::text[],
-  debut_year integer null,
-  is_verified boolean null default false,
-  social_links jsonb null default '{}'::jsonb,
-  monthly_listeners integer null default 0,
-  created_at timestamp without time zone null default now(),
-  updated_at timestamp without time zone null default now(),
-  region_id uuid not null default gen_random_uuid (),
-  date_of_birth date null,
-  constraint artists_pkey primary key (artist_id),
-  constraint artists_artist_id_fkey foreign KEY (artist_id) references users (user_id) on update CASCADE on delete CASCADE,
-  constraint artists_region_id_fkey foreign KEY (region_id) references regions (region_id) on update CASCADE on delete set null
-) TABLESPACE pg_default;
-
-
-
-create trigger set_user_type_to_artist
-after INSERT on artists for EACH row
-execute FUNCTION handle_artist_user_type_changes ();
-
-create trigger set_user_type_to_listener
-after DELETE on artists for EACH row
-execute FUNCTION handle_artist_user_type_changes ();
-
-
-
-create table public.albums (
-  album_id uuid not null default gen_random_uuid (),
-  title text not null,
-  release_date date null,
-  description text null,
-  cover_url text null default '''https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png''::text'::text,
-  genres text[] null default '{}'::text[],
-  total_tracks integer null default 0,
-  likes_count bigint null,
-  created_at timestamp without time zone null default now(),
-  updated_at timestamp without time zone null default now(),
-  is_published boolean null default false,
-  duration integer null,
-  constraint albums_pkey primary key (album_id)
-) TABLESPACE pg_default;
-
-
-
 create table public.album_artists (
-  id uuid not null default gen_random_uuid (),
-  album_id uuid not null default gen_random_uuid (),
-  artist_id uuid not null default gen_random_uuid (),
+  album_artist_id uuid not null default gen_random_uuid (),
+  album_id uuid not null,
+  artist_id uuid not null,
   role public.artist_role not null default 'viewer'::artist_role,
-  constraint album_artists_pkey primary key (id),
-  constraint album_artists_artist_id_key unique (artist_id),
+  sort_order integer not null default 0,
+  created_at timestamp with time zone not null default now(),
+  constraint album_artists_pkey primary key (album_artist_id),
+  constraint album_artists_unique_pair unique (album_id, artist_id),
   constraint album_artists_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
   constraint album_artists_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE
 ) TABLESPACE pg_default;
 
+create index IF not exists idx_album_artists_artist on public.album_artists using btree (artist_id, role) TABLESPACE pg_default;
 
+create table public.album_external_refs (
+  album_external_ref_id uuid not null default gen_random_uuid (),
+  album_id uuid not null,
+  provider_id smallint not null,
+  external_id text not null,
+  external_url text null,
+  image_url text null,
+  raw_payload jsonb null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint album_external_refs_pkey primary key (album_external_ref_id),
+  constraint album_external_album_provider_uq unique (album_id, provider_id),
+  constraint album_external_provider_external_uq unique (provider_id, external_id),
+  constraint album_external_refs_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint album_external_refs_provider_id_fkey foreign KEY (provider_id) references external_providers (provider_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_album_external_provider_external on public.album_external_refs using btree (provider_id, external_id) TABLESPACE pg_default;
+
+create trigger trg_album_external_refs_touch_updated_at BEFORE
+update on album_external_refs for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.album_genres (
+  album_id uuid not null,
+  genre_id uuid not null,
+  created_at timestamp with time zone not null default now(),
+  constraint album_genres_pkey primary key (album_id, genre_id),
+  constraint album_genres_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint album_genres_genre_id_fkey foreign KEY (genre_id) references genres (genre_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create table public.albums (
+  album_id uuid not null default gen_random_uuid (),
+  title text not null,
+  subtitle text null,
+  description text null,
+  release_date date null,
+  release_year integer null,
+  language_code text null,
+  label_id uuid null,
+  cover_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png'::text,
+  copyright_text text null,
+  is_published boolean not null default false,
+  total_tracks integer not null default 0,
+  duration integer not null default 0,
+  likes_count bigint not null default 0,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint albums_pkey primary key (album_id),
+  constraint albums_label_id_fkey foreign KEY (label_id) references labels (label_id) on update CASCADE on delete set null,
+  constraint albums_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
+  constraint albums_duration_chk check ((duration >= 0)),
+  constraint albums_release_year_chk check (
+    (
+      (release_year is null)
+      or (
+        (release_year >= 1900)
+        and (
+          release_year <= (
+            EXTRACT(
+              year
+              from
+                now()
+            )
+          )::integer
+        )
+      )
+    )
+  ),
+  constraint albums_total_tracks_chk check ((total_tracks >= 0))
+) TABLESPACE pg_default;
+
+create trigger trg_albums_touch_updated_at BEFORE
+update on albums for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.artist_external_refs (
+  artist_external_ref_id uuid not null default gen_random_uuid (),
+  artist_id uuid not null,
+  provider_id smallint not null,
+  external_id text not null,
+  external_url text null,
+  image_url text null,
+  raw_payload jsonb null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint artist_external_refs_pkey primary key (artist_external_ref_id),
+  constraint artist_external_artist_provider_uq unique (artist_id, provider_id),
+  constraint artist_external_provider_external_uq unique (provider_id, external_id),
+  constraint artist_external_refs_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE,
+  constraint artist_external_refs_provider_id_fkey foreign KEY (provider_id) references external_providers (provider_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_artist_external_provider_external on public.artist_external_refs using btree (provider_id, external_id) TABLESPACE pg_default;
+
+create trigger trg_artist_external_refs_touch_updated_at BEFORE
+update on artist_external_refs for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.artist_genres (
+  artist_id uuid not null,
+  genre_id uuid not null,
+  created_at timestamp with time zone not null default now(),
+  constraint artist_genres_pkey primary key (artist_id, genre_id),
+  constraint artist_genres_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE,
+  constraint artist_genres_genre_id_fkey foreign KEY (genre_id) references genres (genre_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create table public.artists (
+  artist_id uuid not null,
+  bio text null,
+  cover_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/artists/default_cover.png'::text,
+  debut_year integer null,
+  is_verified boolean not null default false,
+  social_links jsonb not null default '{}'::jsonb,
+  monthly_listeners integer not null default 0,
+  region_id uuid null,
+  date_of_birth date null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint artists_pkey primary key (artist_id),
+  constraint artists_artist_id_fkey foreign KEY (artist_id) references users (user_id) on update CASCADE on delete CASCADE,
+  constraint artists_region_id_fkey foreign KEY (region_id) references regions (region_id) on update CASCADE on delete set null,
+  constraint artists_debut_year_chk check (
+    (
+      (debut_year is null)
+      or (
+        (debut_year >= 1900)
+        and (
+          debut_year <= (
+            EXTRACT(
+              year
+              from
+                now()
+            )
+          )::integer
+        )
+      )
+    )
+  ),
+  constraint artists_monthly_listeners_chk check ((monthly_listeners >= 0))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_artists_region on public.artists using btree (region_id) TABLESPACE pg_default;
+
+create trigger trg_artists_touch_updated_at BEFORE
+update on artists for EACH row
+execute FUNCTION touch_updated_at ();
+
+create trigger trg_set_user_type_to_artist_v2
+after INSERT on artists for EACH row
+execute FUNCTION handle_artist_user_type_changes_v2 ();
+
+create trigger trg_set_user_type_to_listener_v2
+after DELETE on artists for EACH row
+execute FUNCTION handle_artist_user_type_changes_v2 ();
+
+create table public.countries (
+  country_id uuid not null default gen_random_uuid (),
+  code text not null,
+  name text not null,
+  created_at timestamp with time zone not null default now(),
+  constraint countries_pkey primary key (country_id),
+  constraint countries_code_key unique (code)
+) TABLESPACE pg_default;
+
+create index IF not exists countries_name_idx on public.countries using btree (name) TABLESPACE pg_default;
+
+create trigger countries_normalize_code_trg BEFORE INSERT
+or
+update on countries for EACH row
+execute FUNCTION countries_normalize_code ();
+
+create table public.external_providers (
+  provider_id smallserial not null,
+  code text not null,
+  name text not null,
+  base_url text null,
+  created_at timestamp with time zone not null default now(),
+  constraint external_providers_pkey primary key (provider_id),
+  constraint external_providers_code_key unique (code)
+) TABLESPACE pg_default;
+
+create table public.external_track_credits (
+  external_track_credit_id uuid not null default gen_random_uuid (),
+  track_external_ref_id uuid not null,
+  credit_type text not null,
+  external_artist_id text null,
+  display_name text not null,
+  sort_order integer not null default 0,
+  created_at timestamp with time zone not null default now(),
+  constraint external_track_credits_pkey primary key (external_track_credit_id),
+  constraint external_track_credits_unique_row unique (track_external_ref_id, credit_type, display_name),
+  constraint external_track_credits_track_external_ref_id_fkey foreign KEY (track_external_ref_id) references track_external_refs (track_external_ref_id) on update CASCADE on delete CASCADE,
+  constraint external_track_credits_type_chk check (
+    (
+      credit_type = any (
+        array[
+          'primary'::text,
+          'featured'::text,
+          'singer'::text,
+          'composer'::text,
+          'lyricist'::text,
+          'actor'::text,
+          'producer'::text,
+          'other'::text
+        ]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create table public.followers (
+  follower_id uuid not null,
+  following_id uuid not null,
+  created_at timestamp with time zone not null default now(),
+  constraint followers_pkey primary key (follower_id, following_id),
+  constraint followers_follower_id_fkey foreign KEY (follower_id) references users (user_id) on update CASCADE on delete CASCADE,
+  constraint followers_following_id_fkey foreign KEY (following_id) references users (user_id) on update CASCADE on delete CASCADE,
+  constraint followers_no_self_follow_chk check ((follower_id <> following_id))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_followers_following on public.followers using btree (following_id) TABLESPACE pg_default;
+
+create table public.genres (
+  genre_id uuid not null default gen_random_uuid (),
+  slug text not null,
+  name text not null,
+  created_at timestamp with time zone not null default now(),
+  constraint genres_pkey primary key (genre_id),
+  constraint genres_name_key unique (name),
+  constraint genres_slug_key unique (slug)
+) TABLESPACE pg_default;
+
+create table public.labels (
+  label_id uuid not null default gen_random_uuid (),
+  name text not null,
+  external_label_id text null,
+  label_url text null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint labels_pkey primary key (label_id),
+  constraint labels_name_key unique (name)
+) TABLESPACE pg_default;
+
+create trigger trg_labels_touch_updated_at BEFORE
+update on labels for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.languages (
+  language_code text not null,
+  name text not null,
+  created_at timestamp with time zone not null default now(),
+  constraint languages_pkey primary key (language_code)
+) TABLESPACE pg_default;
+
+create table public.plans (
+  plan_id uuid not null default gen_random_uuid (),
+  name text not null,
+  price numeric(10, 2) not null,
+  currency text null default 'INR'::text,
+  billing_cycle public.billing_cycle null default 'monthly'::billing_cycle,
+  features jsonb null default '{}'::jsonb,
+  max_devices integer null default 1,
+  is_active boolean null default true,
+  created_at timestamp without time zone null default now(),
+  updated_at timestamp without time zone null default now(),
+  constraint plans_pkey primary key (plan_id)
+) TABLESPACE pg_default;
+
+create trigger trg_plans_touch_updated_at BEFORE
+update on plans for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.playlist_external_refs (
+  playlist_external_ref_id uuid not null default gen_random_uuid (),
+  playlist_id uuid not null,
+  provider_id smallint not null,
+  external_id text not null,
+  external_url text null,
+  image_url text null,
+  raw_payload jsonb null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint playlist_external_refs_pkey primary key (playlist_external_ref_id),
+  constraint playlist_external_playlist_provider_uq unique (playlist_id, provider_id),
+  constraint playlist_external_provider_external_uq unique (provider_id, external_id),
+  constraint playlist_external_refs_playlist_id_fkey foreign KEY (playlist_id) references playlists (playlist_id) on update CASCADE on delete CASCADE,
+  constraint playlist_external_refs_provider_id_fkey foreign KEY (provider_id) references external_providers (provider_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create trigger trg_playlist_external_refs_touch_updated_at BEFORE
+update on playlist_external_refs for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.playlist_tracks (
+  playlist_track_id uuid not null default gen_random_uuid (),
+  playlist_id uuid not null,
+  track_id uuid not null,
+  position integer not null,
+  added_by uuid null,
+  added_at timestamp with time zone not null default now(),
+  constraint playlist_tracks_pkey primary key (playlist_track_id),
+  constraint playlist_tracks_unique_position unique (playlist_id, "position"),
+  constraint playlist_tracks_unique_pair unique (playlist_id, track_id),
+  constraint playlist_tracks_playlist_id_fkey foreign KEY (playlist_id) references playlists (playlist_id) on update CASCADE on delete CASCADE,
+  constraint playlist_tracks_added_by_fkey foreign KEY (added_by) references users (user_id) on update CASCADE on delete set null,
+  constraint playlist_tracks_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE,
+  constraint playlist_tracks_position_chk check (("position" > 0))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_playlist_tracks_playlist_position on public.playlist_tracks using btree (playlist_id, "position") TABLESPACE pg_default;
 
 create table public.playlists (
   playlist_id uuid not null default gen_random_uuid (),
   name text not null,
-  creator_id uuid null,
-  is_public boolean null default true,
   description text null,
+  creator_id uuid null,
+  is_public boolean not null default true,
   cover_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/playlists/default_cover.png'::text,
-  genres text[] null default '{}'::text[],
-  likes_count bigint null,
-  total_tracks integer null default 0,
-  created_at timestamp without time zone null default now(),
-  updated_at timestamp without time zone null default now(),
-  duration integer null,
+  language_code text null,
+  likes_count bigint not null default 0,
+  total_tracks integer not null default 0,
+  duration integer not null default 0,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
   constraint playlists_pkey primary key (playlist_id),
-  constraint playlists_creator_id_fkey foreign KEY (creator_id) references users (user_id) on delete CASCADE
+  constraint playlists_creator_id_fkey foreign KEY (creator_id) references users (user_id) on update CASCADE on delete set null,
+  constraint playlists_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
+  constraint playlists_duration_chk check ((duration >= 0)),
+  constraint playlists_total_tracks_chk check ((total_tracks >= 0))
 ) TABLESPACE pg_default;
 
-
-
-create table public.playlist_tracks (
-  id bigint generated by default as identity not null,
-  playlist_id uuid not null default gen_random_uuid (),
-  track_id uuid not null default gen_random_uuid (),
-  constraint playlist_tracks_pkey primary key (id),
-  constraint playlist_tracks_playlist_id_fkey foreign KEY (playlist_id) references playlists (playlist_id) on update CASCADE on delete CASCADE,
-  constraint playlist_tracks_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
-) TABLESPACE pg_default;
-
-
-
-create table public.tracks (
-  track_id uuid not null default gen_random_uuid (),
-  title text not null,
-  album_id uuid not null,
-  cover_url text not null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/tracks/default_cover.png'::text,
-  lyrics_url text null,
-  play_count bigint null default 0,
-  is_explicit boolean null default false,
-  likes_count integer null default 0,
-  popularity_score double precision null default 0,
-  created_at timestamp without time zone null default now(),
-  updated_at timestamp without time zone null default now(),
-  video_url text null,
-  is_published boolean null default false,
-  duration integer not null,
-  ext_track_id text null,
-  source text null default 'jiosaavn'::text,
-  language text null,
-  release_date date null,
-  year smallint null,
-  jio_type text null,
-  music text null,
-  music_id text null,
-  primary_artists text null,
-  primary_artists_id text null,
-  featured_artists text null,
-  featured_artists_id text null,
-  singers text null,
-  starring text null,
-  label text null,
-  label_id text null,
-  label_url text null,
-  origin text null,
-  is_drm boolean null default false,
-  has_320kbps boolean null default false,
-  is_dolby_content boolean null default false,
-  has_lyrics boolean null default false,
-  lyrics_snippet text null,
-  copyright_text text null,
-  encrypted_drm_media_url text null,
-  encrypted_media_url text null,
-  encrypted_media_path text null,
-  media_preview_url text null,
-  perma_url text null,
-  album_url text null,
-  rights jsonb null,
-  artist_map jsonb null,
-  webp boolean null default false,
-  cache_state boolean null default false,
-  starred boolean null default false,
-  vcode text null,
-  vlink text null,
-  triller_available boolean null default false,
-  external_payload jsonb null,
-  constraint tracks_pkey primary key (track_id),
-  constraint tracks_album_id_fkey foreign KEY (album_id) references albums (album_id) on delete CASCADE
-) TABLESPACE pg_default;
-
-
-
-create table public.track_artists (
-  track_id uuid not null default gen_random_uuid (),
-  artist_id uuid not null default gen_random_uuid (),
-  created_at timestamp with time zone not null default now(),
-  role public.artist_role not null default 'viewer'::artist_role,
-  id uuid not null default gen_random_uuid (),
-  constraint track_artists_pkey primary key (id),
-  constraint track_artists_artist_id_key unique (artist_id),
-  constraint track_artists_artist_id_key1 unique (artist_id),
-  constraint track_artists_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE,
-  constraint track_artists_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
-) TABLESPACE pg_default;
-
-
-
-create table public.track_audios (
-  id uuid not null default gen_random_uuid (),
-  track_id uuid not null default gen_random_uuid (),
-  ext public.audio_exts not null,
-  bitrate smallint not null,
-  path text not null,
-  created_at timestamp with time zone not null default now(),
-  constraint audio_info_pkey primary key (id),
-  constraint audio_info_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
-) TABLESPACE pg_default;
-
-
+create trigger trg_playlists_touch_updated_at BEFORE
+update on playlists for EACH row
+execute FUNCTION touch_updated_at ();
 
 create table public.regions (
   region_id uuid not null default gen_random_uuid (),
@@ -210,24 +362,490 @@ create table public.regions (
   constraint regions_country_id_fkey foreign KEY (country_id) references countries (country_id) on update CASCADE on delete CASCADE
 ) TABLESPACE pg_default;
 
+create index IF not exists idx_regions_code on public.regions using btree (code) TABLESPACE pg_default;
 
-
-create table public.countries (
-  country_id uuid not null default gen_random_uuid (),
-  code text not null,
-  name text not null,
+create table public.track_artists (
+  track_artist_id uuid not null default gen_random_uuid (),
+  track_id uuid not null,
+  artist_id uuid not null,
+  role public.artist_role not null default 'viewer'::artist_role,
+  sort_order integer not null default 0,
   created_at timestamp with time zone not null default now(),
-  constraint countries_pkey primary key (country_id),
-  constraint countries_code_key unique (code)
+  constraint track_artists_pkey primary key (track_artist_id),
+  constraint track_artists_unique_pair unique (track_id, artist_id),
+  constraint track_artists_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE,
+  constraint track_artists_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
 ) TABLESPACE pg_default;
 
+create index IF not exists idx_track_artists_artist on public.track_artists using btree (artist_id, role) TABLESPACE pg_default;
 
-
-create table public.followers (
-  follower_id uuid not null,
-  following_id uuid not null,
-  created_at timestamp without time zone null default now(),
-  constraint followers_pkey primary key (follower_id, following_id),
-  constraint followers_follower_id_fkey foreign KEY (follower_id) references users (user_id) on update CASCADE on delete CASCADE,
-  constraint followers_following_id_fkey foreign KEY (following_id) references users (user_id) on update CASCADE on delete CASCADE
+create table public.track_assets (
+  track_asset_id uuid not null default gen_random_uuid (),
+  track_id uuid not null,
+  asset_type text not null,
+  codec text null,
+  ext text null,
+  bitrate_kbps integer null,
+  sample_rate_hz integer null,
+  channels smallint null,
+  file_path text not null,
+  file_size_bytes bigint null,
+  duration_ms integer null,
+  is_default boolean not null default false,
+  created_at timestamp with time zone not null default now(),
+  constraint track_assets_pkey primary key (track_asset_id),
+  constraint track_assets_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE,
+  constraint track_assets_bitrate_chk check (
+    (
+      (bitrate_kbps is null)
+      or (bitrate_kbps > 0)
+    )
+  ),
+  constraint track_assets_type_chk check (
+    (
+      asset_type = any (
+        array[
+          'audio_progressive'::text,
+          'audio_hls_master'::text,
+          'audio_hls_variant'::text,
+          'audio_hls_segment'::text,
+          'video'::text
+        ]
+      )
+    )
+  )
 ) TABLESPACE pg_default;
+
+create index IF not exists idx_track_assets_track_type on public.track_assets using btree (track_id, asset_type, bitrate_kbps) TABLESPACE pg_default;
+
+create table public.track_content_features (
+  id uuid not null default gen_random_uuid (),
+  track_id uuid not null,
+  genres text[] not null default '{}'::text[],
+  mood text[] not null default '{}'::text[],
+  language text null,
+  year integer null,
+  energy_level numeric(3, 2) null,
+  danceability numeric(3, 2) null,
+  acousticness numeric(3, 2) null,
+  instrumentalness numeric(3, 2) null,
+  popularity_score numeric(5, 2) null default 0,
+  embedding jsonb null,
+  similar_track_ids uuid[] null default '{}'::uuid[],
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint track_content_features_pkey primary key (id),
+  constraint track_content_features_track_id_key unique (track_id),
+  constraint track_content_features_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_track_features_genres on public.track_content_features using gin (genres) TABLESPACE pg_default;
+
+create index IF not exists idx_track_features_mood on public.track_content_features using gin (mood) TABLESPACE pg_default;
+
+create index IF not exists idx_track_features_language on public.track_content_features using btree (language) TABLESPACE pg_default;
+
+create index IF not exists idx_track_features_popularity on public.track_content_features using btree (popularity_score desc) TABLESPACE pg_default;
+
+create table public.track_credits (
+  track_credit_id uuid not null default gen_random_uuid (),
+  track_id uuid not null,
+  artist_id uuid null,
+  credit_type text not null,
+  display_name text not null,
+  external_artist_id text null,
+  sort_order integer not null default 0,
+  created_at timestamp with time zone not null default now(),
+  constraint track_credits_pkey primary key (track_credit_id),
+  constraint track_credits_unique_row unique (track_id, credit_type, display_name),
+  constraint track_credits_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete set null,
+  constraint track_credits_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE,
+  constraint track_credits_type_chk check (
+    (
+      credit_type = any (
+        array[
+          'primary'::text,
+          'featured'::text,
+          'singer'::text,
+          'composer'::text,
+          'lyricist'::text,
+          'actor'::text,
+          'producer'::text,
+          'other'::text
+        ]
+      )
+    )
+  )
+) TABLESPACE pg_default;
+
+create table public.track_external_refs (
+  track_external_ref_id uuid not null default gen_random_uuid (),
+  track_id uuid not null,
+  provider_id smallint not null,
+  external_id text not null,
+  external_url text null,
+  external_album_id text null,
+  image_url text null,
+  language text null,
+  release_date date null,
+  play_count_external bigint null,
+  has_lyrics boolean null,
+  is_drm boolean null,
+  is_dolby_content boolean null,
+  has_320kbps boolean null,
+  encrypted_media_url text null,
+  encrypted_drm_media_url text null,
+  encrypted_media_path text null,
+  media_preview_url text null,
+  rights jsonb null,
+  raw_payload jsonb null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint track_external_refs_pkey primary key (track_external_ref_id),
+  constraint track_external_provider_external_uq unique (provider_id, external_id),
+  constraint track_external_track_provider_uq unique (track_id, provider_id),
+  constraint track_external_refs_provider_id_fkey foreign KEY (provider_id) references external_providers (provider_id) on update CASCADE on delete CASCADE,
+  constraint track_external_refs_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_track_external_provider_track on public.track_external_refs using btree (provider_id, track_id) TABLESPACE pg_default;
+
+create index IF not exists idx_track_external_provider_external on public.track_external_refs using btree (provider_id, external_id) TABLESPACE pg_default;
+
+create trigger trg_track_external_refs_touch_updated_at BEFORE
+update on track_external_refs for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.track_genres (
+  track_id uuid not null,
+  genre_id uuid not null,
+  created_at timestamp with time zone not null default now(),
+  constraint track_genres_pkey primary key (track_id, genre_id),
+  constraint track_genres_genre_id_fkey foreign KEY (genre_id) references genres (genre_id) on update CASCADE on delete CASCADE,
+  constraint track_genres_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create table public.tracks (
+  track_id uuid not null default gen_random_uuid (),
+  title text not null,
+  subtitle text null,
+  album_id uuid null,
+  track_number integer null,
+  disc_number integer null,
+  duration integer not null,
+  language_code text null,
+  lyrics_url text null,
+  lyrics_snippet text null,
+  is_explicit boolean not null default false,
+  is_published boolean not null default false,
+  play_count bigint not null default 0,
+  likes_count bigint not null default 0,
+  popularity_score double precision not null default 0,
+  copyright_text text null,
+  label_id uuid null,
+  video_url text null,
+  hls_master_path text null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint tracks_pkey primary key (track_id),
+  constraint tracks_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint tracks_label_id_fkey foreign KEY (label_id) references labels (label_id) on update CASCADE on delete set null,
+  constraint tracks_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
+  constraint tracks_track_number_chk check (
+    (
+      (track_number is null)
+      or (track_number > 0)
+    )
+  ),
+  constraint tracks_likes_count_chk check ((likes_count >= 0)),
+  constraint tracks_disc_number_chk check (
+    (
+      (disc_number is null)
+      or (disc_number > 0)
+    )
+  ),
+  constraint tracks_duration_chk check ((duration >= 0)),
+  constraint tracks_play_count_chk check ((play_count >= 0))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_album on public.tracks using btree (album_id) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_language on public.tracks using btree (language_code) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_published on public.tracks using btree (is_published, created_at desc) TABLESPACE pg_default;
+
+create trigger trg_tracks_touch_updated_at BEFORE
+update on tracks for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.tracks (
+  track_id uuid not null default gen_random_uuid (),
+  title text not null,
+  subtitle text null,
+  album_id uuid null,
+  track_number integer null,
+  disc_number integer null,
+  duration integer not null,
+  language_code text null,
+  lyrics_url text null,
+  lyrics_snippet text null,
+  is_explicit boolean not null default false,
+  is_published boolean not null default false,
+  play_count bigint not null default 0,
+  likes_count bigint not null default 0,
+  popularity_score double precision not null default 0,
+  copyright_text text null,
+  label_id uuid null,
+  video_url text null,
+  hls_master_path text null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint tracks_pkey primary key (track_id),
+  constraint tracks_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint tracks_label_id_fkey foreign KEY (label_id) references labels (label_id) on update CASCADE on delete set null,
+  constraint tracks_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
+  constraint tracks_track_number_chk check (
+    (
+      (track_number is null)
+      or (track_number > 0)
+    )
+  ),
+  constraint tracks_likes_count_chk check ((likes_count >= 0)),
+  constraint tracks_disc_number_chk check (
+    (
+      (disc_number is null)
+      or (disc_number > 0)
+    )
+  ),
+  constraint tracks_duration_chk check ((duration >= 0)),
+  constraint tracks_play_count_chk check ((play_count >= 0))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_album on public.tracks using btree (album_id) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_language on public.tracks using btree (language_code) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_published on public.tracks using btree (is_published, created_at desc) TABLESPACE pg_default;
+
+create trigger trg_tracks_touch_updated_at BEFORE
+update on tracks for EACH row
+execute FUNCTION touch_updated_at ();
+
+create table public.user_artist_listening_history (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  artist_id uuid not null,
+  play_count integer not null default 1,
+  total_time_listened_seconds integer not null default 0,
+  unique_tracks_played integer not null default 1,
+  last_played_at timestamp without time zone null,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_artist_listening_history_pkey primary key (id),
+  constraint user_artist_listening_history_user_id_artist_id_key unique (user_id, artist_id),
+  constraint user_artist_listening_history_artist_id_fkey foreign KEY (artist_id) references artists (artist_id) on update CASCADE on delete CASCADE,
+  constraint user_artist_listening_history_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_user_artist_listening_user on public.user_artist_listening_history using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_artist_listening_artist on public.user_artist_listening_history using btree (artist_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_artist_listening_freq on public.user_artist_listening_history using btree (user_id, play_count desc) TABLESPACE pg_default;
+
+create table public.user_genre_affinity (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  genre text not null,
+  affinity_score numeric(3, 2) not null default 0,
+  track_count integer null default 0,
+  total_listen_time_seconds integer null default 0,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_genre_affinity_pkey primary key (id),
+  constraint user_genre_affinity_user_id_genre_key unique (user_id, genre),
+  constraint user_genre_affinity_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_genre_affinity_user on public.user_genre_affinity using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_genre_affinity_score on public.user_genre_affinity using btree (user_id, affinity_score desc) TABLESPACE pg_default;
+
+create table public.user_mood_affinity (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  mood text not null,
+  affinity_score numeric(3, 2) not null default 0,
+  track_count integer null default 0,
+  total_listen_time_seconds integer null default 0,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_mood_affinity_pkey primary key (id),
+  constraint user_mood_affinity_user_id_mood_key unique (user_id, mood),
+  constraint user_mood_affinity_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_mood_affinity_user on public.user_mood_affinity using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_mood_affinity_score on public.user_mood_affinity using btree (user_id, affinity_score desc) TABLESPACE pg_default;
+
+create table public.user_onboarding_preferences (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  preferred_language text null,
+  preferred_region_id uuid null,
+  favorite_genres text[] not null default '{}'::text[],
+  favorite_moods text[] not null default '{}'::text[],
+  favorite_artists uuid[] not null default '{}'::uuid[],
+  allow_recommendations boolean null default true,
+  include_random_songs boolean null default true,
+  randomness_percentage numeric(3, 2) null default 0.15,
+  allow_new_releases boolean null default true,
+  allow_trending_tracks boolean null default true,
+  completed_at timestamp without time zone null,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_onboarding_preferences_pkey primary key (id),
+  constraint user_onboarding_preferences_user_id_key unique (user_id),
+  constraint user_onboarding_preferences_preferred_region_id_fkey foreign KEY (preferred_region_id) references regions (region_id) on update CASCADE on delete set null,
+  constraint user_onboarding_preferences_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_onboarding_prefs_user on public.user_onboarding_preferences using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_onboarding_prefs_region on public.user_onboarding_preferences using btree (preferred_region_id) TABLESPACE pg_default;
+
+create index IF not exists idx_onboarding_prefs_language on public.user_onboarding_preferences using btree (preferred_language) TABLESPACE pg_default;
+
+create table public.user_playlist_listening_history (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  playlist_id uuid not null,
+  play_count integer not null default 1,
+  total_time_listened_seconds integer not null default 0,
+  last_played_at timestamp without time zone null,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_playlist_listening_history_pkey primary key (id),
+  constraint user_playlist_listening_history_user_id_playlist_id_key unique (user_id, playlist_id),
+  constraint user_playlist_listening_history_playlist_id_fkey foreign KEY (playlist_id) references playlists (playlist_id) on update CASCADE on delete CASCADE,
+  constraint user_playlist_listening_history_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_user_playlist_listening_user on public.user_playlist_listening_history using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_playlist_listening_playlist on public.user_playlist_listening_history using btree (playlist_id) TABLESPACE pg_default;
+
+create table public.user_recommendations_cache (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  recommendation_type text not null,
+  recommended_track_ids uuid[] not null,
+  recommended_album_ids uuid[] not null default '{}'::uuid[],
+  recommended_artist_ids uuid[] not null default '{}'::uuid[],
+  algorithm_version integer null default 1,
+  confidence_scores numeric(3, 2) [] null default '{}'::numeric[],
+  reasons text[] null default '{}'::text[],
+  created_at timestamp without time zone not null default now(),
+  expires_at timestamp without time zone null,
+  constraint user_recommendations_cache_pkey primary key (id),
+  constraint user_recommendations_cache_user_id_recommendation_type_key unique (user_id, recommendation_type),
+  constraint user_recommendations_cache_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_rec_cache_user on public.user_recommendations_cache using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_rec_cache_type on public.user_recommendations_cache using btree (user_id, recommendation_type) TABLESPACE pg_default;
+
+create index IF not exists idx_rec_cache_expires on public.user_recommendations_cache using btree (expires_at) TABLESPACE pg_default;
+
+create table public.user_track_listening_history (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  track_id uuid not null,
+  played_at timestamp without time zone not null default now(),
+  time_listened_seconds integer not null default 0,
+  total_duration_seconds integer not null,
+  completion_percentage numeric(5, 2) not null default 0,
+  was_skipped boolean not null default false,
+  skip_at_seconds integer null,
+  listening_context text null,
+  context_id uuid null,
+  device_type text null default 'mobile'::text,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_track_listening_history_pkey primary key (id),
+  constraint user_track_listening_history_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE,
+  constraint user_track_listening_history_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_listening_user_id on public.user_track_listening_history using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_listening_track_id on public.user_track_listening_history using btree (track_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_listening_user_played on public.user_track_listening_history using btree (user_id, played_at desc) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_listening_context on public.user_track_listening_history using btree (user_id, listening_context) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_listening_completion on public.user_track_listening_history using btree (user_id, completion_percentage desc) TABLESPACE pg_default;
+
+create table public.user_track_preferences (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  track_id uuid not null,
+  preference integer not null,
+  mood text[] null,
+  preferred_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_track_preferences_pkey primary key (id),
+  constraint user_track_preferences_user_id_track_id_key unique (user_id, track_id),
+  constraint user_track_preferences_track_id_fkey foreign KEY (track_id) references tracks (track_id) on update CASCADE on delete CASCADE,
+  constraint user_track_preferences_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_pref_user on public.user_track_preferences using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_pref_track on public.user_track_preferences using btree (track_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_track_pref_value on public.user_track_preferences using btree (user_id, preference) TABLESPACE pg_default;
+
+create table public.users (
+  user_id uuid not null default gen_random_uuid (),
+  email text not null,
+  name text not null,
+  user_type public.user_type not null default 'listener'::user_type,
+  subscription_type public.subscription_type not null default 'free'::subscription_type,
+  plan_id uuid null,
+  avatar_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png'::text,
+  followers_count integer not null default 0,
+  followings_count integer not null default 0,
+  settings jsonb not null default '{}'::jsonb,
+  last_login_at timestamp with time zone null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint users_pkey primary key (user_id),
+  constraint users_email_key unique (email),
+  constraint users_plan_id_fkey foreign KEY (plan_id) references plans (plan_id) on update CASCADE on delete set null,
+  constraint users_email_format_chk check (
+    (
+      email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'::text
+    )
+  )
+) TABLESPACE pg_default;
+
+create index IF not exists idx_users_email on public.users using btree (email) TABLESPACE pg_default;
+
+create index IF not exists idx_users_user_type on public.users using btree (user_type) TABLESPACE pg_default;
+
+create index IF not exists idx_users_created_at on public.users using btree (created_at desc) TABLESPACE pg_default;
+
+create unique INDEX IF not exists users_email_lower_unique_idx on public.users using btree (lower(email)) TABLESPACE pg_default;
+
+create trigger trg_users_touch_updated_at BEFORE
+update on users for EACH row
+execute FUNCTION touch_updated_at ();
+
+v_user_genre_profile
+v_user_liked_tracks_with_features
+v_user_recent_plays
+v_user_top_artists
