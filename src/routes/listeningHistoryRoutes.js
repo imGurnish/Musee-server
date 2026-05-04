@@ -45,6 +45,12 @@ router.post('/listening/track/:trackId/dislike', authUser, listeningController.d
 router.delete('/listening/track/:trackId/preference', authUser, listeningController.clearTrackPreference);
 
 /**
+ * Get preference for a track
+ * GET /api/listening/track/:trackId/preference
+ */
+router.get('/listening/track/:trackId/preference', authUser, listeningController.getTrackPreference);
+
+/**
  * Get personalized recommendations
  * GET /api/recommendations?limit=50&type=discovery&includeReasons=true
  */
@@ -73,6 +79,12 @@ router.post('/listening/album/:albumId/dislike', authUser, listeningController.d
  */
 router.delete('/listening/album/:albumId/preference', authUser, listeningController.clearAlbumPreference);
 
+/**
+ * Get album preference
+ * GET /api/listening/album/:albumId/preference
+ */
+router.get('/listening/album/:albumId/preference', authUser, listeningController.getAlbumPreference);
+
 // ============================================================================
 // PLAYLIST PREFERENCES (Authenticated Users)
 // ============================================================================
@@ -94,6 +106,12 @@ router.post('/listening/playlist/:playlistId/dislike', authUser, listeningContro
  * DELETE /api/listening/playlist/:playlistId/preference
  */
 router.delete('/listening/playlist/:playlistId/preference', authUser, listeningController.clearPlaylistPreference);
+
+/**
+ * Get playlist preference
+ * GET /api/listening/playlist/:playlistId/preference
+ */
+router.get('/listening/playlist/:playlistId/preference', authUser, listeningController.getPlaylistPreference);
 
 // ============================================================================
 // ADMIN ROUTES
