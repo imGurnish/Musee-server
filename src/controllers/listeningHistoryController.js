@@ -136,8 +136,8 @@ exports.logTrackPlay = async (req, res) => {
 
     if (error) throw error;
 
-    // Update artist/album listening history (aggregate)
-    await updateAggregateListeningStats(userId, resolvedTrackId, timeListenedSeconds);
+    // Update artist/album/playlist listening history (aggregate)
+    await updateAggregateListeningStats(userId, resolvedTrackId, timeListenedSeconds, listeningContext, contextId);
 
     // Invalidate recommendation cache for strong positive or negative signals.
     if (completionPercentage > 70 || wasSkipped || completionPercentage < 50) {
@@ -156,12 +156,13 @@ exports.logTrackPlay = async (req, res) => {
 };
 
 /**
- * Update aggregate listening stats (artist/album level)
+ * Update aggregate listening stats (artist/album/playlist level)
+ * Uses atomic RPC upserts to avoid race conditions
  * @private
  */
-async function updateAggregateListeningStats(userId, trackId, timeListenedSeconds) {
+async function updateAggregateListeningStats(userId, trackId, timeListenedSeconds, listeningContext, contextId) {
   try {
-    // Get track details (artist_id, album_id)
+    // Get track details (album_id)
     const { data: trackData, error: trackError } = await supabase
       .from('tracks')
       .select('album_id')
@@ -176,51 +177,36 @@ async function updateAggregateListeningStats(userId, trackId, timeListenedSecond
       .select('artist_id')
       .eq('track_id', trackId);
 
-    // Update album stats
+    // Update album stats via atomic RPC
     if (trackData.album_id) {
-      await supabase
-        .from('user_album_listening_history')
-        .upsert({
-          user_id: userId,
-          album_id: trackData.album_id,
-          play_count: 1,
-          total_time_listened_seconds: timeListenedSeconds,
-          unique_tracks_played: 1,
-          last_played_at: new Date()
-        }, {
-          onConflict: 'user_id,album_id'
-        })
-        .then(({ data, error }) => {
-          if (error) throw error;
-          // Increment existing record
-          return supabase
-            .from('user_album_listening_history')
-            .update({
-              play_count: supabase.rpc('increment', { x: 1 }),
-              total_time_listened_seconds: supabase.rpc('add_time', { seconds: timeListenedSeconds }),
-              last_played_at: new Date()
-            })
-            .eq('user_id', userId)
-            .eq('album_id', trackData.album_id);
-        });
+      const { error: albumErr } = await supabase.rpc('upsert_user_album_listening', {
+        p_user_id: userId,
+        p_album_id: trackData.album_id,
+        p_time_seconds: timeListenedSeconds || 0
+      });
+      if (albumErr) console.error('Error updating album listening stats:', albumErr);
     }
 
-    // Update artist stats
+    // Update artist stats via atomic RPC
     if (artistData && artistData.length > 0) {
       for (const artist of artistData) {
-        await supabase
-          .from('user_artist_listening_history')
-          .upsert({
-            user_id: userId,
-            artist_id: artist.artist_id,
-            play_count: 1,
-            total_time_listened_seconds: timeListenedSeconds,
-            unique_tracks_played: 1,
-            last_played_at: new Date()
-          }, {
-            onConflict: 'user_id,artist_id'
-          });
+        const { error: artistErr } = await supabase.rpc('upsert_user_artist_listening', {
+          p_user_id: userId,
+          p_artist_id: artist.artist_id,
+          p_time_seconds: timeListenedSeconds || 0
+        });
+        if (artistErr) console.error('Error updating artist listening stats:', artistErr);
       }
+    }
+
+    // Update playlist stats if listening context is playlist
+    if (listeningContext === 'playlist' && contextId && isUuid(contextId)) {
+      const { error: playlistErr } = await supabase.rpc('upsert_user_playlist_listening', {
+        p_user_id: userId,
+        p_playlist_id: contextId,
+        p_time_seconds: timeListenedSeconds || 0
+      });
+      if (playlistErr) console.error('Error updating playlist listening stats:', playlistErr);
     }
   } catch (error) {
     console.error('Error updating aggregate stats:', error);
@@ -700,6 +686,160 @@ exports.cleanupExpiredCaches = async (req, res) => {
   } catch (error) {
     console.error('Cache cleanup error:', error);
     res.status(500).json({ error: 'Cleanup failed' });
+  }
+};
+
+// ============================================================================
+// 6. ALBUM & PLAYLIST LIKES
+// ============================================================================
+
+/**
+ * Like an album
+ * POST /api/listening/album/:albumId/like
+ */
+exports.likeAlbum = async (req, res) => {
+  try {
+    const { albumId } = req.params;
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from('user_album_preferences')
+      .upsert({
+        user_id: userId,
+        album_id: albumId,
+        preference: 1
+      }, { onConflict: 'user_id,album_id' })
+      .select();
+
+    if (error) throw error;
+    res.json({ success: true, data: data[0] });
+  } catch (error) {
+    console.error('Error liking album:', error);
+    res.status(500).json({ error: 'Failed to like album' });
+  }
+};
+
+/**
+ * Dislike an album
+ * POST /api/listening/album/:albumId/dislike
+ */
+exports.dislikeAlbum = async (req, res) => {
+  try {
+    const { albumId } = req.params;
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from('user_album_preferences')
+      .upsert({
+        user_id: userId,
+        album_id: albumId,
+        preference: -1
+      }, { onConflict: 'user_id,album_id' })
+      .select();
+
+    if (error) throw error;
+    res.json({ success: true, data: data[0] });
+  } catch (error) {
+    console.error('Error disliking album:', error);
+    res.status(500).json({ error: 'Failed to dislike album' });
+  }
+};
+
+/**
+ * Clear album preference
+ * DELETE /api/listening/album/:albumId/preference
+ */
+exports.clearAlbumPreference = async (req, res) => {
+  try {
+    const { albumId } = req.params;
+    const userId = req.user.id;
+
+    const { error } = await supabase
+      .from('user_album_preferences')
+      .delete()
+      .eq('user_id', userId)
+      .eq('album_id', albumId);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Album preference cleared' });
+  } catch (error) {
+    console.error('Error clearing album preference:', error);
+    res.status(500).json({ error: 'Failed to clear album preference' });
+  }
+};
+
+/**
+ * Like a playlist
+ * POST /api/listening/playlist/:playlistId/like
+ */
+exports.likePlaylist = async (req, res) => {
+  try {
+    const { playlistId } = req.params;
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from('user_playlist_preferences')
+      .upsert({
+        user_id: userId,
+        playlist_id: playlistId,
+        preference: 1
+      }, { onConflict: 'user_id,playlist_id' })
+      .select();
+
+    if (error) throw error;
+    res.json({ success: true, data: data[0] });
+  } catch (error) {
+    console.error('Error liking playlist:', error);
+    res.status(500).json({ error: 'Failed to like playlist' });
+  }
+};
+
+/**
+ * Dislike a playlist
+ * POST /api/listening/playlist/:playlistId/dislike
+ */
+exports.dislikePlaylist = async (req, res) => {
+  try {
+    const { playlistId } = req.params;
+    const userId = req.user.id;
+
+    const { data, error } = await supabase
+      .from('user_playlist_preferences')
+      .upsert({
+        user_id: userId,
+        playlist_id: playlistId,
+        preference: -1
+      }, { onConflict: 'user_id,playlist_id' })
+      .select();
+
+    if (error) throw error;
+    res.json({ success: true, data: data[0] });
+  } catch (error) {
+    console.error('Error disliking playlist:', error);
+    res.status(500).json({ error: 'Failed to dislike playlist' });
+  }
+};
+
+/**
+ * Clear playlist preference
+ * DELETE /api/listening/playlist/:playlistId/preference
+ */
+exports.clearPlaylistPreference = async (req, res) => {
+  try {
+    const { playlistId } = req.params;
+    const userId = req.user.id;
+
+    const { error } = await supabase
+      .from('user_playlist_preferences')
+      .delete()
+      .eq('user_id', userId)
+      .eq('playlist_id', playlistId);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Playlist preference cleared' });
+  } catch (error) {
+    console.error('Error clearing playlist preference:', error);
+    res.status(500).json({ error: 'Failed to clear playlist preference' });
   }
 };
 

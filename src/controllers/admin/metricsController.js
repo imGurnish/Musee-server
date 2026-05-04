@@ -108,4 +108,54 @@ async function getUsage(req, res) {
     });
 }
 
-module.exports = { getUsage };
+// GET /api/admin/metrics/engagement
+async function getEngagementMetrics(req, res) {
+    try {
+        const client = supabaseAdmin || supabase;
+        const { data, error } = await client.rpc('get_engagement_metrics');
+        if (error) throw error;
+        res.json({ timestamp: new Date().toISOString(), engagement: data });
+    } catch (e) {
+        console.error('Engagement metrics error:', e);
+        res.status(500).json({ error: e?.message || 'Failed to get engagement metrics' });
+    }
+}
+
+// POST /api/admin/metrics/refresh-trending
+// Replaces pg_cron: call this from an external scheduler or manually
+async function refreshTrending(req, res) {
+    try {
+        const client = supabaseAdmin || supabase;
+        const results = [];
+
+        // Refresh materialized views
+        const views = ['mv_trending_tracks_7d', 'mv_trending_artists_30d'];
+        for (const view of views) {
+            const { error } = await client.rpc('refresh_materialized_view', { view_name: view });
+            if (error) {
+                results.push({ view, status: 'error', message: error.message });
+            } else {
+                results.push({ view, status: 'refreshed' });
+            }
+        }
+
+        // Recalculate popularity scores
+        const { error: popErr } = await client.rpc('recalculate_popularity_scores');
+        if (popErr) {
+            results.push({ task: 'popularity_scores', status: 'error', message: popErr.message });
+        } else {
+            results.push({ task: 'popularity_scores', status: 'recalculated' });
+        }
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            results
+        });
+    } catch (e) {
+        console.error('Refresh trending error:', e);
+        res.status(500).json({ error: e?.message || 'Failed to refresh trending data' });
+    }
+}
+
+module.exports = { getUsage, getEngagementMetrics, refreshTrending };

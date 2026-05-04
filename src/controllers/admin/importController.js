@@ -963,6 +963,164 @@ async function ensureTrackArtistLink(trackId, artistId, role = 'owner') {
   return true;
 }
 
+/**
+ * Import genre data from JioSaavn payload into track_genres junction table.
+ * Creates genres in the genres table if they don't exist.
+ * The DB trigger trg_sync_genres_to_content_features will auto-sync to track_content_features.
+ * @private
+ */
+async function importTrackGenres(trackId, rawSong) {
+  try {
+    const genreNames = new Set();
+
+    // JioSaavn uses language as a genre proxy (e.g. "Hindi", "Punjabi")
+    const language = rawSong?.language || rawSong?.more_info?.language;
+    if (language && typeof language === 'string') {
+      const name = language.trim();
+      if (name) genreNames.add(name.charAt(0).toUpperCase() + name.slice(1).toLowerCase());
+    }
+
+    // Check for explicit genre fields in the payload
+    const genreField = rawSong?.genre || rawSong?.more_info?.genre || rawSong?.more_info?.song_pids;
+    if (genreField) {
+      splitCsv(genreField).forEach(g => {
+        const name = g.trim();
+        if (name) genreNames.add(name.charAt(0).toUpperCase() + name.slice(1).toLowerCase());
+      });
+    }
+
+    // Some payloads have a "type" that can indicate genre (e.g. "Pop", "Rock")
+    const typeField = rawSong?.type || rawSong?.more_info?.music;
+    if (typeField && typeof typeField === 'string' && typeField.trim() && typeField.trim().toLowerCase() !== 'song') {
+      genreNames.add(typeField.trim().charAt(0).toUpperCase() + typeField.trim().slice(1).toLowerCase());
+    }
+
+    for (const genreName of genreNames) {
+      const slug = genreName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      if (!slug) continue;
+
+      // Upsert genre
+      const { data: existing } = await supabaseAdmin
+        .from('genres')
+        .select('genre_id')
+        .eq('slug', slug)
+        .maybeSingle();
+
+      let genreId = existing?.genre_id;
+      if (!genreId) {
+        const { data: created, error: createErr } = await supabaseAdmin
+          .from('genres')
+          .insert({ slug, name: genreName })
+          .select('genre_id')
+          .single();
+
+        if (createErr && createErr.code === '23505') {
+          // Race condition: genre already exists
+          const { data: reFetch } = await supabaseAdmin
+            .from('genres')
+            .select('genre_id')
+            .eq('slug', slug)
+            .single();
+          genreId = reFetch?.genre_id;
+        } else if (createErr) {
+          importLog('warn', 'Failed to create genre', { genreName, slug, reason: createErr.message });
+          continue;
+        } else {
+          genreId = created?.genre_id;
+        }
+      }
+
+      if (genreId) {
+        const { error: linkErr } = await supabaseAdmin
+          .from('track_genres')
+          .upsert({ track_id: trackId, genre_id: genreId }, { onConflict: 'track_id,genre_id' });
+        if (linkErr && linkErr.code !== '23505') {
+          importLog('warn', 'Failed to link track genre', { trackId, genreId, reason: linkErr.message });
+        }
+      }
+    }
+  } catch (error) {
+    importLog('warn', 'importTrackGenres failed (non-fatal)', { trackId, reason: error?.message });
+  }
+}
+
+/**
+ * Import credits (singer, composer, lyricist, etc.) from JioSaavn artistMap into track_credits.
+ * Also attempts to link credits to internal artist_ids where possible.
+ * @private
+ */
+async function importTrackCredits(trackId, rawSong) {
+  try {
+    const artistMap = parseJsonMaybe(
+      rawSong?.more_info?.artistMap ||
+      rawSong?.artistMap ||
+      rawSong?.artist_map
+    );
+    if (!artistMap || typeof artistMap !== 'object') return;
+
+    const providerId = await getProviderId('jiosaavn');
+
+    const roleMapping = {
+      primary_artists: 'primary',
+      featured_artists: 'featured',
+      singers: 'singer',
+      composers: 'composer',
+      lyricists: 'lyricist',
+      actors: 'actor',
+      producers: 'producer'
+    };
+
+    let sortOrder = 0;
+
+    for (const [mapKey, creditType] of Object.entries(roleMapping)) {
+      const artists = asArray(artistMap[mapKey] || []);
+
+      for (const artist of artists) {
+        if (!artist || typeof artist !== 'object') continue;
+
+        const displayName = safeText(artist.name, null);
+        if (!displayName) continue;
+
+        const externalArtistId = String(artist.id || '').trim() || null;
+
+        // Try to find matching internal artist
+        let internalArtistId = null;
+        if (externalArtistId) {
+          try {
+            internalArtistId = await findEntityIdByExternalId({
+              refTable: 'artist_external_refs',
+              entityIdColumn: 'artist_id',
+              providerId,
+              externalId: externalArtistId
+            });
+          } catch (_) {
+            // Non-fatal: artist may not be imported yet
+          }
+        }
+
+        const { error: creditErr } = await supabaseAdmin
+          .from('track_credits')
+          .upsert({
+            track_id: trackId,
+            artist_id: internalArtistId,
+            credit_type: creditType,
+            display_name: displayName,
+            external_artist_id: externalArtistId,
+            sort_order: sortOrder++
+          }, { onConflict: 'track_id,credit_type,display_name' });
+
+        if (creditErr && creditErr.code !== '23505') {
+          importLog('warn', 'Failed to upsert track credit', {
+            trackId, displayName, creditType, reason: creditErr.message
+          });
+        }
+      }
+    }
+  } catch (error) {
+    importLog('warn', 'importTrackCredits failed (non-fatal)', { trackId, reason: error?.message });
+  }
+}
+
 async function trackHasIngestedAudio(trackId) {
   const trackRow = await supabaseAdmin
     .from('tracks')
@@ -1254,6 +1412,10 @@ async function importTrackById(trackId, options = {}) {
     dbTrackId: tx.data.trackId,
     hasEncryptedMedia: Boolean(tx.data.encryptedMediaUrl)
   });
+
+  // Import genres and credits from JioSaavn payload (non-fatal)
+  await importTrackGenres(tx.data.trackId, normalized.rawSong);
+  await importTrackCredits(tx.data.trackId, normalized.rawSong);
 
   await ingestTrackAudioAssets({
     trackId: tx.data.trackId,
