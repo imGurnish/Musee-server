@@ -578,6 +578,59 @@ create trigger trg_tracks_touch_updated_at BEFORE
 update on tracks for EACH row
 execute FUNCTION touch_updated_at ();
 
+create table public.tracks (
+  track_id uuid not null default gen_random_uuid (),
+  title text not null,
+  subtitle text null,
+  album_id uuid null,
+  track_number integer null,
+  disc_number integer null,
+  duration integer not null,
+  language_code text null,
+  lyrics_url text null,
+  lyrics_snippet text null,
+  is_explicit boolean not null default false,
+  is_published boolean not null default false,
+  play_count bigint not null default 0,
+  likes_count bigint not null default 0,
+  popularity_score double precision not null default 0,
+  copyright_text text null,
+  label_id uuid null,
+  video_url text null,
+  hls_master_path text null,
+  created_at timestamp with time zone not null default now(),
+  updated_at timestamp with time zone not null default now(),
+  constraint tracks_pkey primary key (track_id),
+  constraint tracks_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint tracks_label_id_fkey foreign KEY (label_id) references labels (label_id) on update CASCADE on delete set null,
+  constraint tracks_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
+  constraint tracks_track_number_chk check (
+    (
+      (track_number is null)
+      or (track_number > 0)
+    )
+  ),
+  constraint tracks_likes_count_chk check ((likes_count >= 0)),
+  constraint tracks_disc_number_chk check (
+    (
+      (disc_number is null)
+      or (disc_number > 0)
+    )
+  ),
+  constraint tracks_duration_chk check ((duration >= 0)),
+  constraint tracks_play_count_chk check ((play_count >= 0))
+) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_album on public.tracks using btree (album_id) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_language on public.tracks using btree (language_code) TABLESPACE pg_default;
+
+create index IF not exists idx_tracks_published on public.tracks using btree (is_published, created_at desc) TABLESPACE pg_default;
+
+create trigger trg_tracks_touch_updated_at BEFORE
+update on tracks for EACH row
+execute FUNCTION touch_updated_at ();
+
 create table public.user_artist_listening_history (
   id uuid not null default gen_random_uuid (),
   user_id uuid not null,
@@ -796,3 +849,25 @@ v_user_genre_profile
 v_user_liked_tracks_with_features
 v_user_recent_plays
 v_user_top_artists
+
+create table public.user_album_listening_history (
+  id uuid not null default gen_random_uuid (),
+  user_id uuid not null,
+  album_id uuid not null,
+  play_count integer not null default 1,
+  total_time_listened_seconds integer not null default 0,
+  unique_tracks_played integer not null default 1,
+  last_played_at timestamp without time zone null,
+  created_at timestamp without time zone not null default now(),
+  updated_at timestamp without time zone not null default now(),
+  constraint user_album_listening_history_pkey primary key (id),
+  constraint user_album_listening_history_user_id_album_id_key unique (user_id, album_id),
+  constraint user_album_listening_history_album_id_fkey foreign KEY (album_id) references albums (album_id) on update CASCADE on delete CASCADE,
+  constraint user_album_listening_history_user_id_fkey foreign KEY (user_id) references users (user_id) on update CASCADE on delete CASCADE
+) TABLESPACE pg_default;
+
+create index IF not exists idx_user_album_listening_user on public.user_album_listening_history using btree (user_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_album_listening_album on public.user_album_listening_history using btree (album_id) TABLESPACE pg_default;
+
+create index IF not exists idx_user_album_listening_freq on public.user_album_listening_history using btree (user_id, play_count desc) TABLESPACE pg_default;
