@@ -45,6 +45,12 @@ router.post('/listening/track/:trackId/dislike', authUser, listeningController.d
 router.delete('/listening/track/:trackId/preference', authUser, listeningController.clearTrackPreference);
 
 /**
+ * Get all liked tracks with full metadata
+ * GET /api/listening/liked-tracks
+ */
+router.get('/listening/liked-tracks', authUser, listeningController.getLikedTracks);
+
+/**
  * Get preference for a track
  * GET /api/listening/track/:trackId/preference
  */

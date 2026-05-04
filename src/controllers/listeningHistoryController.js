@@ -340,6 +340,38 @@ exports.getTrackPreference = async (req, res) => {
   }
 };
 
+/**
+ * Get all liked tracks for the authenticated user with full metadata
+ * GET /api/listening/liked-tracks
+ */
+exports.getLikedTracks = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Use supabaseAdmin so RLS doesn't block the query
+    const { data: prefs, error } = await db
+      .from('user_track_preferences')
+      .select('track_id')
+      .eq('user_id', userId)
+      .eq('preference', 1)
+      .order('preferred_at', { ascending: false });
+
+    if (error) throw error;
+    if (!prefs || prefs.length === 0) {
+      return res.json({ success: true, tracks: [] });
+    }
+
+    const trackIds = prefs.map(p => p.track_id).filter(Boolean);
+    const { listTracksByIdsUser } = require('../models/trackModel');
+    const tracks = await listTracksByIdsUser(trackIds);
+
+    return res.json({ success: true, tracks });
+  } catch (error) {
+    console.error('Error getting liked tracks:', error);
+    return res.status(500).json({ error: 'Failed to get liked tracks' });
+  }
+};
+
 // ============================================================================
 // 3. RECOMMENDATION ENDPOINTS
 // ============================================================================
