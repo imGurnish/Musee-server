@@ -45,11 +45,73 @@ router.post('/listening/track/:trackId/dislike', authUser, listeningController.d
 router.delete('/listening/track/:trackId/preference', authUser, listeningController.clearTrackPreference);
 
 /**
+ * Get preference for a track
+ * GET /api/listening/track/:trackId/preference
+ */
+router.get('/listening/track/:trackId/preference', authUser, listeningController.getTrackPreference);
+
+/**
  * Get personalized recommendations
  * GET /api/recommendations?limit=50&type=discovery&includeReasons=true
  */
 router.get('/recommendations', authUser, listeningController.getRecommendations);
 router.get('/listening/recommendations', authUser, listeningController.getRecommendations);
+
+// ============================================================================
+// ALBUM PREFERENCES (Authenticated Users)
+// ============================================================================
+
+/**
+ * Like an album
+ * POST /api/listening/album/:albumId/like
+ */
+router.post('/listening/album/:albumId/like', authUser, listeningController.likeAlbum);
+
+/**
+ * Dislike an album
+ * POST /api/listening/album/:albumId/dislike
+ */
+router.post('/listening/album/:albumId/dislike', authUser, listeningController.dislikeAlbum);
+
+/**
+ * Clear album preference
+ * DELETE /api/listening/album/:albumId/preference
+ */
+router.delete('/listening/album/:albumId/preference', authUser, listeningController.clearAlbumPreference);
+
+/**
+ * Get album preference
+ * GET /api/listening/album/:albumId/preference
+ */
+router.get('/listening/album/:albumId/preference', authUser, listeningController.getAlbumPreference);
+
+// ============================================================================
+// PLAYLIST PREFERENCES (Authenticated Users)
+// ============================================================================
+
+/**
+ * Like a playlist
+ * POST /api/listening/playlist/:playlistId/like
+ */
+router.post('/listening/playlist/:playlistId/like', authUser, listeningController.likePlaylist);
+
+/**
+ * Dislike a playlist
+ * POST /api/listening/playlist/:playlistId/dislike
+ */
+router.post('/listening/playlist/:playlistId/dislike', authUser, listeningController.dislikePlaylist);
+
+/**
+ * Clear playlist preference
+ * DELETE /api/listening/playlist/:playlistId/preference
+ */
+router.delete('/listening/playlist/:playlistId/preference', authUser, listeningController.clearPlaylistPreference);
+
+/**
+ * Get playlist preference
+ * GET /api/listening/playlist/:playlistId/preference
+ */
+router.get('/listening/playlist/:playlistId/preference', authUser, listeningController.getPlaylistPreference);
 
 // ============================================================================
 // ADMIN ROUTES
