@@ -552,6 +552,22 @@ function firstArtistFromTrack(rawTrack) {
   return extractTrackArtistCandidates(rawTrack)[0] || { externalId: null, name: null };
 }
 
+function buildTrackSubtitle(title, artistCandidates) {
+  if (!Array.isArray(artistCandidates) || artistCandidates.length === 0) {
+    return null;
+  }
+
+  const artistNames = artistCandidates
+    .map(candidate => candidate.name)
+    .filter(Boolean);
+
+  if (artistNames.length === 0) {
+    return null;
+  }
+
+  return `${title} by ${artistNames.join(', ')}`;
+}
+
 function normalizeTrackPayload(rawData, trackId) {
   const rawSong = rawData?.[trackId] || rawData?.songs?.[trackId] || rawData;
   const artist = firstArtistFromTrack(rawSong || {});
@@ -564,10 +580,13 @@ function normalizeTrackPayload(rawData, trackId) {
     ''
   ).trim() || null;
 
+  const title = safeText(rawSong?.song || rawSong?.title, 'Untitled Track');
+
   return {
     rawSong,
     id: String(rawSong?.id || trackId || '').trim(),
-    title: safeText(rawSong?.song || rawSong?.title, 'Untitled Track'),
+    title,
+    subtitle: buildTrackSubtitle(title, artistCandidates),
     duration: toInt(rawSong?.duration, 0),
     language: safeText(rawSong?.language, null),
     isExplicit: rawSong?.explicit_content === 1 || rawSong?.explicit_content === '1',
@@ -1426,7 +1445,7 @@ async function importTrackById(trackId, options = {}) {
       is_explicit: normalized.isExplicit,
       is_published: true,
       track_number: normalized.trackNumber,
-      subtitle: null,
+      subtitle: normalized.subtitle,
       lyrics_url: null,
       lyrics_snippet: null,
       play_count: normalized.playCount,
