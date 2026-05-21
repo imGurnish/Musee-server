@@ -1,6 +1,7 @@
 const { supabase, supabaseAdmin } = require('../db/config');
 const { isUUID, isNonEmptyString, } = require('../utils/validators');
 const { toDateOnly, toNum } = require('../utils/typeConversions');
+const { normalizeLanguageCodes } = require('../utils/userPreferences');
 const table = 'albums';
 
 function client() {
@@ -187,10 +188,11 @@ async function deleteAlbum(album_id) {
     if (error) throw error;
 }
 
-async function listAlbumsUser({ limit = 20, offset = 0, q } = {}) {
+async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
     // Public list: only published albums, return minimal fields and public artist profile
     let qb = client()
         .from(table)
@@ -206,6 +208,8 @@ async function listAlbumsUser({ limit = 20, offset = 0, q } = {}) {
         `, { count: 'exact' })
         .eq('is_published', true)
         .order('created_at', { ascending: false });
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
     if (q) qb = qb.ilike('title', `%${q}%`);
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
@@ -382,10 +386,11 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
 module.exports.listAlbumsByArtist = listAlbumsByArtist;
 module.exports.listAlbumsByArtistUser = listAlbumsByArtistUser;
 
-async function listTrendingAlbumsUser({ limit = 20, offset = 0 } = {}) {
+async function listTrendingAlbumsUser({ limit = 20, offset = 0, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
     let qb = client()
         .from(table)
@@ -402,6 +407,8 @@ async function listTrendingAlbumsUser({ limit = 20, offset = 0 } = {}) {
         .eq('is_published', true)
         .order('likes_count', { ascending: false })
         .order('created_at', { ascending: false });
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;

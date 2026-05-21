@@ -2,6 +2,7 @@ const { supabase, supabaseAdmin } = require('../db/config');
 const { getBlobSasUrl, getBlobSasUrlWithExpiry, isAbsoluteUrl, getBlobPublicUrl } = require('../utils/azureSas');
 const { isUUID } = require('../utils/validators');
 const { toNum } = require('../utils/typeConversions');
+const { normalizeLanguageCodes } = require('../utils/userPreferences');
 
 const table = 'tracks';
 
@@ -319,10 +320,11 @@ async function deleteTrack(track_id) {
     if (error) throw error;
 }
 
-async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
+async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
     let qb = client()
         .from(table)
@@ -342,6 +344,8 @@ async function listTracksUser({ limit = 20, offset = 0, q } = {}) {
         `, { count: 'exact' })
         .eq('is_published', true)
         .order('created_at', { ascending: false });
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
     if (q) qb = qb.ilike('title', `%${q}%`);
 
     const { data, error, count } = await qb.range(start, end);
@@ -578,10 +582,11 @@ async function listTracksByIdsUser(trackIds = []) {
 
 module.exports.listTracksByIdsUser = listTracksByIdsUser;
 
-async function listTrendingTracksUser({ limit = 20, offset = 0 } = {}) {
+async function listTrendingTracksUser({ limit = 20, offset = 0, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
     let qb = client()
         .from(table)
@@ -598,6 +603,8 @@ async function listTrendingTracksUser({ limit = 20, offset = 0 } = {}) {
         .eq('is_published', true)
         .order('play_count', { ascending: false })
         .order('created_at', { ascending: false }); // secondary sort
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;

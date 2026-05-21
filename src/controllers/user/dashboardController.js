@@ -1,6 +1,7 @@
 const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumModel');
 const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
+const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
 
 function parsePagination(query) {
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
@@ -28,6 +29,8 @@ async function madeForYou(req, res) {
 
     // Split limit to get a mix
     const perTypeLimit = Math.ceil(limit / 3) + 2; // fetch a bit more per type
+    const prefs = await getUserOnboardingPreferences(req.user?.id);
+    const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
 
     // We pass same offset/limit to both for pagination consistency, 
     // although mixing pagination across two tables is tricky. 
@@ -36,12 +39,13 @@ async function madeForYou(req, res) {
     const subOffset = Math.floor(offset / 3);
     const emptyResult = { items: [], total: 0 };
     const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
-        listAlbumsUser({ limit: perTypeLimit, offset: subOffset }),
-        listTracksUser({ limit: perTypeLimit, offset: subOffset }),
+        listAlbumsUser({ limit: perTypeLimit, offset: subOffset, preferredLanguages }),
+        listTracksUser({ limit: perTypeLimit, offset: subOffset, preferredLanguages }),
         listRecommendedPlaylistsUser({
             userId: req.user?.id,
             limit: perTypeLimit,
             offset: subOffset,
+            preferredLanguages,
         }),
     ]);
 
@@ -92,6 +96,8 @@ async function madeForYou(req, res) {
 
 async function trending(req, res) {
     const { limit, page, offset } = parsePagination(req.query);
+    const prefs = await getUserOnboardingPreferences(req.user?.id);
+    const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
 
     // Fetch Trending Albums (by likes) and Trending Tracks (by plays)
     // We fetch more than needed to mix
@@ -105,9 +111,9 @@ async function trending(req, res) {
     // Use allSettled so one source running out of rows doesn't crash the whole endpoint
     const emptyResult = { items: [], total: 0 };
     const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
-        listTrendingAlbumsUser({ limit: fetchLimit, offset: subOffset }),
-        listTrendingTracksUser({ limit: fetchLimit, offset: subOffset }),
-        listTrendingPlaylistsUser({ limit: fetchLimit, offset: subOffset }),
+        listTrendingAlbumsUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
+        listTrendingTracksUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
+        listTrendingPlaylistsUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
     ]);
 
     const albumsRes = albumsSettled.status === 'fulfilled' ? albumsSettled.value : emptyResult;

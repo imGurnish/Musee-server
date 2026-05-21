@@ -1,4 +1,5 @@
 const { supabase, supabaseAdmin } = require('../db/config');
+const { normalizeLanguageCodes } = require('../utils/userPreferences');
 
 const table = 'playlists';
 
@@ -250,10 +251,11 @@ async function getPlaylistUser(playlist_id) {
     return mapPlaylistDetail(data);
 }
 
-async function listTrendingPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
+async function listTrendingPlaylistsUser({ limit = 20, offset = 0, q, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
     const end = start + l - 1;
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
     let qb = client()
         .from(table)
@@ -264,6 +266,8 @@ async function listTrendingPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
         .eq('is_public', true)
         .order('likes_count', { ascending: false })
         .order('updated_at', { ascending: false });
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
 
     if (q) qb = qb.ilike('name', `%${q}%`);
 
@@ -273,13 +277,14 @@ async function listTrendingPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
     return { items: (data || []).map(mapPlaylistSummary), total: count || 0 };
 }
 
-async function listRecommendedPlaylistsUser({ userId, limit = 20, offset = 0, q } = {}) {
+async function listRecommendedPlaylistsUser({ userId, limit = 20, offset = 0, q, preferredLanguages } = {}) {
     const cappedLimit = Math.max(1, Math.min(100, Number(limit) || 20));
     const safeOffset = Math.max(0, Number(offset) || 0);
     const candidateCap = Math.max(100, safeOffset + cappedLimit + 60);
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
     if (!userId || !isUUID(userId)) {
-        return listTrendingPlaylistsUser({ limit: cappedLimit, offset: safeOffset, q });
+        return listTrendingPlaylistsUser({ limit: cappedLimit, offset: safeOffset, q, preferredLanguages: languageCodes });
     }
 
     const recommendedIds = [];
@@ -344,6 +349,8 @@ async function listRecommendedPlaylistsUser({ userId, limit = 20, offset = 0, q 
             .eq('is_public', true)
             .in('playlist_id', rankedIds)
             .limit(candidateCap);
+        if (languageCodes.length === 1) recQuery = recQuery.eq('language_code', languageCodes[0]);
+        else if (languageCodes.length > 1) recQuery = recQuery.in('language_code', languageCodes);
 
         if (q) recQuery = recQuery.ilike('name', `%${q}%`);
 
@@ -366,6 +373,7 @@ async function listRecommendedPlaylistsUser({ userId, limit = 20, offset = 0, q 
             limit: candidateCap,
             offset: 0,
             q,
+            preferredLanguages: languageCodes,
         });
         for (const item of trendingItems) {
             if (!seen.has(item.playlist_id)) {

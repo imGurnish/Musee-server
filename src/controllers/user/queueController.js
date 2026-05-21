@@ -2,6 +2,7 @@ const createError = require('http-errors');
 const { getRedisClient } = require('../../utils/redisClient');
 const { listTracksUser, listTracksByIdsUser } = require('../../models/trackModel');
 const { isUUID } = require('../../utils/validators');
+const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
 
 const DEFAULT_MIN_QUEUE_SIZE = Math.max(
   1,
@@ -21,10 +22,13 @@ async function ensureMinQueue(userId, minSize = 10) {
   let ids = await client.lRange(key, 0, -1);
   if (ids.length >= minSize) return ids;
 
+  const prefs = await getUserOnboardingPreferences(userId);
+  const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
+
   // determine how many to add
   const need = minSize - ids.length;
   // get total published tracks count
-  const { total } = await listTracksUser({ limit: 1, offset: 0 });
+  const { total } = await listTracksUser({ limit: 1, offset: 0, preferredLanguages });
   if (!total || total <= 0) return ids;
 
   const seen = new Set(ids);
@@ -35,7 +39,7 @@ async function ensureMinQueue(userId, minSize = 10) {
   let attempts = 0;
   while (candidates.length < need && attempts < 5) {
     const offset = maxOffset > 0 ? Math.floor(Math.random() * (maxOffset + 1)) : 0;
-    const { items } = await listTracksUser({ limit: FETCH_LIMIT, offset });
+    const { items } = await listTracksUser({ limit: FETCH_LIMIT, offset, preferredLanguages });
     for (const t of (items || [])) {
       const id = t.track_id;
       if (!seen.has(id)) {

@@ -10,8 +10,9 @@
 
 const createError = require('http-errors');
 const { getRedisClient } = require('../../utils/redisClient');
-const { supabase } = require('../../db/config');
+const { supabase, supabaseAdmin } = require('../../db/config');
 const listeningHistoryController = require('../listeningHistoryController');
+const { normalizeLanguageCodes } = require('../../utils/userPreferences');
 
 // Queue key patterns
 const queueKey = (userId) => `user:queue:${userId}`;
@@ -157,6 +158,11 @@ exports.smartFillQueue = async (req, res) => {
         });
       }
 
+      const preferredLanguages = await getPreferredLanguages(userId);
+      if (preferredLanguages.length) {
+        trackIds = await filterTrackIdsByLanguages(trackIds, preferredLanguages);
+      }
+
       // Filter out already-queued tracks and liked dislikes
       const queueSet = new Set(currentQueue);
       const { data: disliked } = await supabase
@@ -209,34 +215,79 @@ exports.smartFillQueue = async (req, res) => {
  * @private
  */
 async function getDiscoveryRecommendations(userId) {
-  // Query user's favorite genres from onboarding
-  const { data: prefs } = await supabase
+  const client = supabaseAdmin || supabase;
+
+  // Query user's onboarding preferences, including language
+  const { data: prefs } = await client
     .from('user_onboarding_preferences')
-    .select('favorite_genres')
+    .select('favorite_genres, preferred_languages')
     .eq('user_id', userId)
-    .single();
+    .maybeSingle();
+
+  const preferredLanguages = normalizeLanguageCodes(prefs?.preferred_languages);
 
   if (!prefs?.favorite_genres?.length) {
     // No preferences, get popular tracks
-    const { data: popular } = await supabase
+    let popularQuery = client
       .from('tracks')
-      .select('track_id')
+      .select('track_id, language_code')
       .eq('is_published', true)
       .order('popularity_score', { ascending: false })
       .limit(50);
+
+    if (preferredLanguages.length === 1) popularQuery = popularQuery.eq('language_code', preferredLanguages[0]);
+    else if (preferredLanguages.length > 1) popularQuery = popularQuery.in('language_code', preferredLanguages);
+
+    const { data: popular } = await popularQuery;
 
     return popular?.map(t => t.track_id) || [];
   }
 
   // Get tracks in user's favorite genres
-  const { data: tracks } = await supabase
+  let tracksQuery = client
     .from('track_content_features')
-    .select('track_id')
+    .select('track_id, tracks!inner(language_code)')
     .contains('genres', prefs.favorite_genres)
     .order('popularity_score', { ascending: false })
     .limit(50);
 
+  if (preferredLanguages.length === 1) tracksQuery = tracksQuery.eq('tracks.language_code', preferredLanguages[0]);
+  else if (preferredLanguages.length > 1) tracksQuery = tracksQuery.in('tracks.language_code', preferredLanguages);
+
+  const { data: tracks } = await tracksQuery;
+
   return tracks?.map(t => t.track_id) || [];
+}
+
+async function getPreferredLanguages(userId) {
+  if (!userId) return null;
+
+  const client = supabaseAdmin || supabase;
+  const { data, error } = await client
+    .from('user_onboarding_preferences')
+    .select('preferred_languages')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return normalizeLanguageCodes(data?.preferred_languages);
+}
+
+async function filterTrackIdsByLanguages(trackIds, preferredLanguages) {
+  const ids = Array.from(new Set((trackIds || []).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const client = supabaseAdmin || supabase;
+  const { data, error } = await client
+    .from('tracks')
+    .select('track_id')
+    .in('track_id', ids)
+    .in('language_code', preferredLanguages);
+
+  if (error) throw error;
+
+  const allowed = new Set((data || []).map((row) => row.track_id));
+  return ids.filter((id) => allowed.has(id));
 }
 
 // ============================================================================
