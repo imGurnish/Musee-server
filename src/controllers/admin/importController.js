@@ -180,9 +180,43 @@ function toInt(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function decodeHtmlEntities(value) {
+  if (typeof value !== 'string' || !value) return value;
+
+  const entityMap = {
+    amp: '&',
+    quot: '"',
+    apos: "'",
+    lt: '<',
+    gt: '>',
+    nbsp: ' '
+  };
+
+  return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
+    if (entity[0] === '#') {
+      const isHex = entity[1]?.toLowerCase() === 'x';
+      const codePoint = Number.parseInt(isHex ? entity.slice(2) : entity.slice(1), isHex ? 16 : 10);
+
+      if (Number.isFinite(codePoint)) {
+        try {
+          return String.fromCodePoint(codePoint);
+        } catch (_) {
+          return match;
+        }
+      }
+
+      return match;
+    }
+
+    return Object.prototype.hasOwnProperty.call(entityMap, entity)
+      ? entityMap[entity]
+      : match;
+  });
+}
+
 function safeText(value, fallback = null) {
   if (typeof value !== 'string') return fallback;
-  const text = value.trim();
+  const text = decodeHtmlEntities(value).trim();
   return text || fallback;
 }
 
