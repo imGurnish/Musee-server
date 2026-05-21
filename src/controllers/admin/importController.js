@@ -225,6 +225,75 @@ function toLargeImage(imageUrl) {
   return imageUrl.replace(/50x50/g, '500x500').replace(/150x150/g, '500x500');
 }
 
+function normalizeArtistCandidate(externalId, name) {
+  const normalizedName = safeText(name, null);
+  const normalizedExternalId = String(externalId || '').trim() || null;
+
+  if (!normalizedExternalId && !normalizedName) return null;
+
+  return {
+    externalId: normalizedExternalId,
+    name: normalizedName
+  };
+}
+
+function extractTrackArtistCandidates(rawTrack) {
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (externalId, name) => {
+    const candidate = normalizeArtistCandidate(externalId, name);
+    if (!candidate) return;
+
+    const key = candidate.externalId || (candidate.name || '').toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const primaryNames = splitCsv(
+    rawTrack?.primary_artists ||
+    rawTrack?.more_info?.primary_artists ||
+    rawTrack?.singers ||
+    rawTrack?.more_info?.singers
+  );
+  const primaryIds = splitCsv(
+    rawTrack?.primary_artists_id ||
+    rawTrack?.more_info?.primary_artists_id
+  );
+
+  primaryNames.forEach((name, index) => {
+    addCandidate(index < primaryIds.length ? primaryIds[index] : null, name);
+  });
+
+  const artistMapRaw = parseJsonMaybe(
+    rawTrack?.more_info?.artistMap ||
+    rawTrack?.artistMap ||
+    rawTrack?.artist_map
+  );
+
+  const mappedCandidates = asArray(
+    artistMapRaw?.primary_artists ||
+    artistMapRaw?.featured_artists ||
+    artistMapRaw?.artists ||
+    artistMapRaw
+  );
+
+  for (const artist of mappedCandidates) {
+    if (artist && typeof artist === 'object') {
+      addCandidate(artist.id || artist.artistId || null, artist.name || artist.title || null);
+    }
+  }
+
+  if (artistMapRaw && typeof artistMapRaw === 'object' && !Array.isArray(artistMapRaw)) {
+    for (const [name, id] of Object.entries(artistMapRaw)) {
+      addCandidate(id, name);
+    }
+  }
+
+  return candidates;
+}
+
 async function runWithConcurrency(items, concurrency, worker) {
   const source = Array.isArray(items) ? items : [];
   if (source.length === 0) return [];
@@ -480,66 +549,13 @@ async function fetchTrackMediaForIngest({ encryptedMediaUrl }) {
 }
 
 function firstArtistFromTrack(rawTrack) {
-  const primaryNames = splitCsv(
-    rawTrack?.primary_artists ||
-    rawTrack?.more_info?.primary_artists ||
-    rawTrack?.singers ||
-    rawTrack?.more_info?.singers
-  );
-  const primaryIds = splitCsv(
-    rawTrack?.primary_artists_id ||
-    rawTrack?.more_info?.primary_artists_id
-  );
-
-  if (primaryNames.length > 0) {
-    return {
-      externalId: primaryIds[0] || null,
-      name: primaryNames[0] || null
-    };
-  }
-
-  const artistMapRaw = parseJsonMaybe(
-    rawTrack?.more_info?.artistMap ||
-    rawTrack?.artistMap ||
-    rawTrack?.artist_map
-  );
-
-  const mappedCandidates = asArray(
-    artistMapRaw?.primary_artists ||
-    artistMapRaw?.artists ||
-    artistMapRaw
-  );
-
-  if (mappedCandidates.length > 0 && typeof mappedCandidates[0] === 'object') {
-    const first = mappedCandidates[0] || {};
-    return {
-      externalId: String(first.id || first.artistId || '').trim() || null,
-      name: safeText(first.name, null)
-    };
-  }
-
-  if (artistMapRaw && typeof artistMapRaw === 'object' && !Array.isArray(artistMapRaw)) {
-    const entries = Object.entries(artistMapRaw);
-    if (entries.length > 0) {
-      const [name, id] = entries[0];
-      return {
-        externalId: String(id || '').trim() || null,
-        name: safeText(name, null)
-      };
-    }
-  }
-
-  const names = splitCsv(rawTrack?.primary_artists || rawTrack?.singers || rawTrack?.more_info?.singers);
-
-  return {
-    externalId: null,
-    name: names[0] || null
-  };
+  return extractTrackArtistCandidates(rawTrack)[0] || { externalId: null, name: null };
 }
 
 function normalizeTrackPayload(rawData, trackId) {
   const rawSong = rawData?.[trackId] || rawData?.songs?.[trackId] || rawData;
   const artist = firstArtistFromTrack(rawSong || {});
+  const artistCandidates = extractTrackArtistCandidates(rawSong || {});
 
   const albumId = String(
     rawSong?.albumid ||
@@ -561,6 +577,7 @@ function normalizeTrackPayload(rawData, trackId) {
     image: toLargeImage(safeText(rawSong?.image || rawSong?.more_info?.image, null)),
     artistExternalId: artist.externalId,
     artistName: artist.name,
+    artistCandidates,
     downloadUrl: safeText(rawSong?.encrypted_media_url || rawSong?.more_info?.encrypted_media_url, null),
     previewUrl: safeText(rawSong?.media_preview_url || rawSong?.more_info?.media_preview_url, null),
     permaUrl: safeText(rawSong?.perma_url || rawSong?.more_info?.perma_url, null),
@@ -1291,6 +1308,14 @@ async function importTrackById(trackId, options = {}) {
   }
 
   const artistImport = await ensureArtistImported(normalized.artistExternalId, normalized.artistName, options);
+  const trackArtistCandidates = Array.isArray(normalized.artistCandidates) && normalized.artistCandidates.length > 0
+    ? normalized.artistCandidates
+    : [
+        {
+          externalId: normalized.artistExternalId,
+          name: normalized.artistName
+        }
+      ];
 
   if (existingTrackId) {
     const existingTrack = await supabaseAdmin
@@ -1302,6 +1327,12 @@ async function importTrackById(trackId, options = {}) {
     if (existingTrack.error) throw existingTrack.error;
 
     const linkedTrackArtist = await ensureTrackArtistLink(existingTrackId, artistImport.artistId, 'owner');
+    const additionalTrackArtistLinks = [];
+    for (const candidate of trackArtistCandidates.slice(1)) {
+      const importedArtist = await ensureArtistImported(candidate.externalId, candidate.name, options);
+      const linked = await ensureTrackArtistLink(existingTrackId, importedArtist.artistId, 'viewer');
+      additionalTrackArtistLinks.push({ artistId: importedArtist.artistId, linked });
+    }
     const targetAlbumId = options.forcedAlbumId || existingTrack.data?.album_id || null;
     const linkedAlbumArtist = targetAlbumId
       ? await ensureAlbumArtistLink(targetAlbumId, artistImport.artistId, 'owner')
@@ -1324,6 +1355,7 @@ async function importTrackById(trackId, options = {}) {
       existingTrackId,
       artistId: artistImport.artistId,
       linkedTrackArtist,
+      additionalTrackArtistLinks,
       linkedAlbumArtist,
       targetAlbumId
     });
@@ -1408,6 +1440,12 @@ async function importTrackById(trackId, options = {}) {
     const dbTrackId = track.track_id || track.id;
 
     await ensureTrackArtistLink(dbTrackId, artistImport.artistId, 'owner');
+    const additionalTrackArtistLinks = [];
+    for (const candidate of trackArtistCandidates.slice(1)) {
+      const importedArtist = await ensureArtistImported(candidate.externalId, candidate.name, options);
+      const linked = await ensureTrackArtistLink(dbTrackId, importedArtist.artistId, 'viewer');
+      additionalTrackArtistLinks.push({ artistId: importedArtist.artistId, linked });
+    }
 
     await upsertExternalRef({
       refTable: 'track_external_refs',
@@ -1428,7 +1466,8 @@ async function importTrackById(trackId, options = {}) {
 
     return {
       trackId: dbTrackId,
-      encryptedMediaUrl: normalized.downloadUrl
+      encryptedMediaUrl: normalized.downloadUrl,
+      additionalTrackArtistLinks
     };
   }, { operationName: `Import track ${trackId}` });
 
@@ -1444,7 +1483,8 @@ async function importTrackById(trackId, options = {}) {
   importLog('info', 'Track core transaction complete', {
     trackId,
     dbTrackId: tx.data.trackId,
-    hasEncryptedMedia: Boolean(tx.data.encryptedMediaUrl)
+    hasEncryptedMedia: Boolean(tx.data.encryptedMediaUrl),
+    additionalTrackArtistLinks: tx.data.additionalTrackArtistLinks?.length || 0
   });
 
   // Import genres and credits from JioSaavn payload (non-fatal)
