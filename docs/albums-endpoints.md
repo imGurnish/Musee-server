@@ -17,10 +17,8 @@ Base paths:
 {
   "album_id": "uuid",
   "title": "string",
-  "subtitle": "string|null",
   "description": "string|null",
   "release_date": "YYYY-MM-DD|null",
-  "release_year": 2026,
   "language_code": "en|null",
   "label_id": "uuid|null",
   "cover_url": "string",
@@ -59,7 +57,7 @@ Base paths:
 
 ### User writable fields
 
-`title`, `subtitle`, `description`, `release_date`, `release_year`, `language_code`, `label_id`, `copyright_text`, `is_published`
+`title`, `description`, `release_date`, `language_code`, `label_id`, `copyright_text`, `is_published`
 
 ### User album artist routes (owner-only)
 - `POST /api/user/albums/:id/artists`

@@ -11,7 +11,7 @@ const { isUUID } = require('../../utils/validators');
 function filterAllowedFields(payload) {
     // Whitelist fields that users can set on tracks
     const allowed = new Set([
-        'title', 'subtitle', 'album_id', 'track_number', 'disc_number',
+        'title', 'album_id', 'track_number', 'disc_number',
         'duration', 'language_code', 'lyrics_url', 'lyrics_snippet',
         'is_explicit', 'is_published', 'copyright_text', 'label_id', 'hls_master_path'
     ]);

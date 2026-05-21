@@ -20,7 +20,6 @@ Base paths:
 {
   "track_id": "uuid",
   "title": "string",
-  "subtitle": "string|null",
   "album_id": "uuid",
   "track_number": 1,
   "disc_number": 1,
@@ -60,7 +59,7 @@ Base paths:
 ### `POST /api/admin/tracks`
 - Content-Type: `multipart/form-data`
 - Required fields: `title`, `album_id`, `duration`
-- Optional fields: `subtitle`, `track_number`, `disc_number`, `language_code`, `lyrics_url`, `lyrics_snippet`, `is_explicit`, `copyright_text`, `label_id`, `hls_master_path`, `is_published`
+- Optional fields: `track_number`, `disc_number`, `language_code`, `lyrics_url`, `lyrics_snippet`, `is_explicit`, `copyright_text`, `label_id`, `hls_master_path`, `is_published`
 - Files: `audio` (required), `video` (optional)
 - Behavior:
   - Creates track with `is_published=false`

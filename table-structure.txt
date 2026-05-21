@@ -48,10 +48,8 @@ create table public.album_genres (
 create table public.albums (
   album_id uuid not null default gen_random_uuid (),
   title text not null,
-  subtitle text null,
   description text null,
   release_date date null,
-  release_year integer null,
   language_code text null,
   label_id uuid null,
   cover_url text null default 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/covers/albums/default_cover.png'::text,
@@ -66,23 +64,6 @@ create table public.albums (
   constraint albums_label_id_fkey foreign KEY (label_id) references labels (label_id) on update CASCADE on delete set null,
   constraint albums_language_code_fkey foreign KEY (language_code) references languages (language_code) on update CASCADE on delete set null,
   constraint albums_duration_chk check ((duration >= 0)),
-  constraint albums_release_year_chk check (
-    (
-      (release_year is null)
-      or (
-        (release_year >= 1900)
-        and (
-          release_year <= (
-            EXTRACT(
-              year
-              from
-                now()
-            )
-          )::integer
-        )
-      )
-    )
-  ),
   constraint albums_total_tracks_chk check ((total_tracks >= 0))
 ) TABLESPACE pg_default;
 
@@ -528,7 +509,6 @@ create table public.track_genres (
 create table public.tracks (
   track_id uuid not null default gen_random_uuid (),
   title text not null,
-  subtitle text null,
   album_id uuid null,
   track_number integer null,
   disc_number integer null,
@@ -581,7 +561,6 @@ execute FUNCTION touch_updated_at ();
 create table public.tracks (
   track_id uuid not null default gen_random_uuid (),
   title text not null,
-  subtitle text null,
   album_id uuid null,
   track_number integer null,
   disc_number integer null,

@@ -1,0 +1,6 @@
+properly handling label accounts
+removing subtitle from tracks and albums
+added by and playlist manageement features
+artist ownership and editing controls
+artist login and dashboard
+label login and dashboard

@@ -552,22 +552,6 @@ function firstArtistFromTrack(rawTrack) {
   return extractTrackArtistCandidates(rawTrack)[0] || { externalId: null, name: null };
 }
 
-function buildTrackSubtitle(title, artistCandidates) {
-  if (!Array.isArray(artistCandidates) || artistCandidates.length === 0) {
-    return null;
-  }
-
-  const artistNames = artistCandidates
-    .map(candidate => candidate.name)
-    .filter(Boolean);
-
-  if (artistNames.length === 0) {
-    return null;
-  }
-
-  return `${title} by ${artistNames.join(', ')}`;
-}
-
 function normalizeTrackPayload(rawData, trackId) {
   const rawSong = rawData?.[trackId] || rawData?.songs?.[trackId] || rawData;
   const artist = firstArtistFromTrack(rawSong || {});
@@ -586,7 +570,6 @@ function normalizeTrackPayload(rawData, trackId) {
     rawSong,
     id: String(rawSong?.id || trackId || '').trim(),
     title,
-    subtitle: buildTrackSubtitle(title, artistCandidates),
     duration: toInt(rawSong?.duration, 0),
     language: safeText(rawSong?.language, null),
     isExplicit: rawSong?.explicit_content === 1 || rawSong?.explicit_content === '1',
@@ -630,7 +613,7 @@ function normalizeAlbumPayload(rawData, albumId) {
     rawAlbum: album,
     id: String(album?.id || album?.albumid || albumId || '').trim(),
     title: safeText(album?.title || album?.name, 'Untitled Album'),
-    description: safeText(album?.subtitle || album?.description, 'Imported from JioSaavn'),
+    description: safeText(album?.description, 'Imported from JioSaavn'),
     image: toLargeImage(safeText(album?.image, null)),
     releaseDate: safeText(album?.release_date, null),
     language: safeText(album?.language, null),
@@ -1445,7 +1428,6 @@ async function importTrackById(trackId, options = {}) {
       is_explicit: normalized.isExplicit,
       is_published: true,
       track_number: normalized.trackNumber,
-      subtitle: normalized.subtitle,
       lyrics_url: null,
       lyrics_snippet: null,
       play_count: normalized.playCount,

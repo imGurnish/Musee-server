@@ -144,10 +144,8 @@ Album releases.
 |--------|------|-------------|---------|
 | `album_id` | `uuid` | PK | gen_random_uuid() |
 | `title` | `text` | NOT NULL | — |
-| `subtitle` | `text` | — | NULL |
 | `description` | `text` | — | NULL |
 | `release_date` | `date` | — | NULL |
-| `release_year` | `integer` | year ≥1900 and ≤current | NULL |
 | `language_code` | `text` | FK→languages(language_code) | NULL |
 | `label_id` | `uuid` | FK→labels(label_id) | NULL |
 | `cover_url` | `text` | — | default album cover |
@@ -201,7 +199,6 @@ Individual songs / tracks.
 |--------|------|-------------|---------|
 | `track_id` | `uuid` | PK | gen_random_uuid() |
 | `title` | `text` | NOT NULL | — |
-| `subtitle` | `text` | — | NULL |
 | `album_id` | `uuid` | FK→albums(album_id) | NULL |
 | `track_number` | `integer` | >0 if not NULL | NULL |
 | `disc_number` | `integer` | >0 if not NULL | NULL |
@@ -604,7 +601,7 @@ All tables have RLS enabled with policies for:
 ### Check Constraints
 - `artists.debut_year BETWEEN 1900 and EXTRACT(YEAR FROM now())`
 - `artists.monthly_listeners >= 0`
-- `albums.total_tracks >= 0`, `albums.duration >= 0`, `albums.release_year BETWEEN 1900 and EXTRACT(YEAR FROM now())`
+- `albums.total_tracks >= 0`, `albums.duration >= 0`
 - `tracks.duration >= 0`, `tracks.track_number > 0`, `tracks.disc_number > 0`, `tracks.play_count >= 0`, `tracks.likes_count >= 0`
 - `playlist_tracks.position > 0`
 - `followers.follower_id <> following_id` (no self-follows)

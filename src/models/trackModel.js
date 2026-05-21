@@ -79,7 +79,6 @@ function sanitizeInsert(payload = {}) {
     if (!isUUID(payload.album_id)) throw new Error('album_id (UUID) is required');
     out.album_id = payload.album_id;
 
-    if (payload.subtitle !== undefined) out.subtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim() : null;
     if (payload.track_number !== undefined) {
         const trackNumber = toNum(payload.track_number, null);
         if (trackNumber === null || trackNumber <= 0) throw new Error('track_number must be a positive integer');
@@ -135,7 +134,6 @@ function sanitizeUpdate(payload = {}) {
         if (!isUUID(payload.album_id)) throw new Error('album_id must be a valid UUID');
         out.album_id = payload.album_id;
     }
-    if (payload.subtitle !== undefined) out.subtitle = typeof payload.subtitle === 'string' ? payload.subtitle.trim() : null;
     if (payload.track_number !== undefined) {
         const trackNumber = toNum(payload.track_number, null);
         if (trackNumber === null || trackNumber <= 0) throw new Error('track_number must be a positive integer');
@@ -179,7 +177,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            track_id, title, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
@@ -205,7 +203,6 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
     const items = (data || []).map(row => ({
         track_id: row.track_id,
         title: row.title,
-        subtitle: row.subtitle,
         album_id: row.album_id,
         album: {
             title: row.albums?.title,
@@ -245,7 +242,7 @@ async function getTrack(track_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            track_id, title, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
                 role,
@@ -269,7 +266,6 @@ async function getTrack(track_id) {
     return {
         track_id: data.track_id,
         title: data.title,
-        subtitle: data.subtitle,
         album_id: data.album_id,
         album: {
             title: data.albums?.title,
@@ -428,7 +424,7 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     let qb = client()
         .from(table)
         .select(`
-            track_id, title, subtitle, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
+            track_id, title, album_id, track_number, disc_number, duration, language_code, lyrics_url, lyrics_snippet, play_count, is_explicit, likes_count, popularity_score, copyright_text, label_id, hls_master_path, created_at, updated_at, video_url, is_published,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!inner(
                 role,
@@ -455,7 +451,6 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     const items = (data || []).map(row => ({
         track_id: row.track_id,
         title: row.title,
-        subtitle: row.subtitle,
         album_id: row.album_id,
         album: {
             title: row.albums?.title,
