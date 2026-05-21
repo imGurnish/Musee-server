@@ -583,7 +583,7 @@ function normalizeTrackPayload(rawData, trackId) {
     downloadUrl: safeText(rawSong?.encrypted_media_url || rawSong?.more_info?.encrypted_media_url, null),
     previewUrl: safeText(rawSong?.media_preview_url || rawSong?.more_info?.media_preview_url, null),
     permaUrl: safeText(rawSong?.perma_url || rawSong?.more_info?.perma_url, null),
-    playCount: toInt(rawSong?.play_count, 0),
+    playCount: 0,
     copyrightText: safeText(rawSong?.copyright_text, null)
   };
 }
@@ -1430,7 +1430,7 @@ async function importTrackById(trackId, options = {}) {
       track_number: normalized.trackNumber,
       lyrics_url: null,
       lyrics_snippet: null,
-      play_count: normalized.playCount,
+      play_count: 0,
       likes_count: 0,
       popularity_score: 0,
       copyright_text: normalized.copyrightText,
