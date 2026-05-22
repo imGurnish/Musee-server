@@ -2,6 +2,7 @@ const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumMo
 const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
+const db = require('../../utils/supabaseClient');
 
 function parsePagination(query) {
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
@@ -20,6 +21,82 @@ function shuffle(array) {
             array[randomIndex], array[currentIndex]];
     }
     return array;
+}
+
+// Helper to boost recommendations by recent listening context
+async function boostByRecentContext(userId, items) {
+    try {
+        const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+
+        const { data: recentTracks } = await db
+            .from('user_track_listening_history')
+            .select('track_id')
+            .eq('user_id', userId)
+            .gt('played_at', threeHoursAgo)
+            .limit(20);
+
+        if (!recentTracks || recentTracks.length === 0) return items;
+
+        const recentTrackIds = new Set(recentTracks.map(t => t.track_id));
+
+        // Get genres and moods from recent tracks
+        const { data: recentTracksFeatures } = await db
+            .from('track_content_features')
+            .select('genres, mood')
+            .in('track_id', Array.from(recentTrackIds))
+            .limit(20);
+
+        if (!recentTracksFeatures || recentTracksFeatures.length === 0) return items;
+
+        // Aggregate genres and moods
+        const recentGenres = new Set();
+        const recentMoods = new Set();
+        for (const track of recentTracksFeatures) {
+            if (Array.isArray(track.genres)) {
+                track.genres.forEach(g => recentGenres.add(g));
+            }
+            if (Array.isArray(track.mood)) {
+                track.mood.forEach(m => recentMoods.add(m));
+            }
+        }
+
+        // Score items by genre/mood match
+        const scored = items.map(item => {
+            let score = 0;
+
+            // Get genres/moods from item
+            let itemGenres = [];
+            let itemMoods = [];
+
+            if (item.type === 'album' && item.genres) {
+                itemGenres = Array.isArray(item.genres) ? item.genres : [];
+            } else if (item.type === 'track' && item.genres) {
+                itemGenres = Array.isArray(item.genres) ? item.genres : [];
+            }
+
+            if (item.type === 'track' && item.mood) {
+                itemMoods = Array.isArray(item.mood) ? item.mood : [];
+            }
+
+            // Calculate match score
+            for (const genre of itemGenres) {
+                if (recentGenres.has(genre)) score += 2;
+            }
+            for (const mood of itemMoods) {
+                if (recentMoods.has(mood)) score += 1;
+            }
+
+            return { item, score };
+        });
+
+        // Sort by context score (higher first), then stable sort preserves original order for ties
+        scored.sort((a, b) => b.score - a.score);
+
+        return scored.map(s => s.item);
+    } catch (error) {
+        console.error('Error boosting by recent context:', error);
+        return items; // Fallback to original order if error
+    }
 }
 
 async function madeForYou(req, res) {
@@ -88,10 +165,13 @@ async function madeForYou(req, res) {
     // Slice to limit
     const items = combined.slice(0, limit);
 
+    // Boost by recent listening context for better relevance
+    const contextBoostedItems = await boostByRecentContext(req.user?.id, items);
+
     // Total is estimate
     const total = (albumsRes.total || 0) + (tracksRes.total || 0) + (playlistsRes.total || 0);
 
-    res.json({ items, total, page, limit });
+    res.json({ items: contextBoostedItems, total, page, limit });
 }
 
 async function trending(req, res) {
