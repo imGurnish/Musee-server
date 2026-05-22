@@ -117,15 +117,16 @@ async function listTracks(req, res) {
     res.json({ items, total, page, limit });
 }
 
-// GET /api/user/artists/:id/albums
+// GET /api/user/artists/:id/albums?page=&limit=&q=&single-track=true
 async function listAlbums(req, res) {
     const { id } = req.params;
     if (!isUUID(id)) throw createError(400, 'invalid artist id');
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
+    const singleTrack = req.query['single-track'] === 'true';
     const offset = page * limit;
-    const { items, total } = await listAlbumsByArtistUser({ artist_id: id, limit, offset, q });
+    const { items, total } = await listAlbumsByArtistUser({ artist_id: id, limit, offset, q, singleTrack });
     res.json({ items, total, page, limit });
 }
 

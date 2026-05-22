@@ -405,7 +405,7 @@ async function listAlbumsByArtist({ artist_id, limit = 20, offset = 0, q } = {})
     return { items, total: count };
 }
 
-async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } = {}) {
+async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q, singleTrack = false } = {}) {
     const { isUUID } = require('../utils/validators');
     if (!isUUID(artist_id)) throw new Error('artist_id is invalid');
     const start = Math.max(0, Number(offset) || 0);
@@ -425,21 +425,56 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
             )
         `, { count: 'exact' })
         .eq('is_published', true)
-        .gt('total_tracks', 1)
         .eq('album_artists.artist_id', artist_id)
         .order('created_at', { ascending: false });
+
+    if (singleTrack) {
+        // Singles: albums that contain exactly one track
+        qb = qb.eq('total_tracks', 1);
+    } else {
+        // Regular albums: more than one track
+        qb = qb.gt('total_tracks', 1);
+    }
+
     if (q) qb = qb.ilike('title', `%${q}%`);
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
-    const items = (data || []).map(row => ({
-        album_id: row.album_id,
-        title: row.title,
-        cover_url: row.cover_url,
-        total_tracks: row.total_tracks,
-        duration: row.duration,
-        created_at: row.created_at,
-        artists: mapArtistsFromAlbumRows(row.album_artists || [])
-    }));
+
+    // For singles, fetch the track_id so the client can play directly without
+    // opening the album detail page.
+    let singleTrackMap = {};
+    if (singleTrack && data && data.length > 0) {
+        const albumIds = data.map(r => r.album_id);
+        const { data: trackRows, error: trackError } = await client()
+            .from('tracks')
+            .select('track_id, album_id')
+            .in('album_id', albumIds)
+            .eq('is_published', true)
+            .limit(albumIds.length);
+        if (trackError) throw trackError;
+        for (const t of (trackRows || [])) {
+            // First published track wins (there should only be one per album)
+            if (!singleTrackMap[t.album_id]) singleTrackMap[t.album_id] = t.track_id;
+        }
+    }
+
+    const items = (data || []).map(row => {
+        const base = {
+            album_id: row.album_id,
+            title: row.title,
+            cover_url: row.cover_url,
+            total_tracks: row.total_tracks,
+            duration: row.duration,
+            created_at: row.created_at,
+            artists: mapArtistsFromAlbumRows(row.album_artists || []),
+        };
+        if (singleTrack) {
+            base.single = true;
+            base.single_track_id = singleTrackMap[row.album_id] || null;
+        }
+        return base;
+    });
+
     return { items, total: count };
 }
 
