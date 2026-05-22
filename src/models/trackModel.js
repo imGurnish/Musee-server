@@ -320,12 +320,76 @@ async function deleteTrack(track_id) {
     if (error) throw error;
 }
 
-async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages } = {}) {
+async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages, skipHls = false } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
-    const end = start + l - 1;
     const languageCodes = normalizeLanguageCodes(preferredLanguages);
 
+    if (q) {
+        // Step 1: Use fuzzy trigram RPC to fetch matching IDs and total count
+        const { data: matched, error: rpcError } = await client().rpc('search_track_ids', {
+            search_term: q,
+            preferred_languages: languageCodes,
+            limit_val: l,
+            offset_val: start
+        });
+        if (rpcError) throw rpcError;
+
+        if (!matched || matched.length === 0) {
+            return { items: [], total: 0 };
+        }
+
+        const trackIds = matched.map(m => m.track_id);
+        const total = Number(matched[0].total_count || 0);
+
+        // Step 2: Fetch detailed track records for matched IDs
+        const { data: rows, error: fetchError } = await client()
+            .from(table)
+            .select(`
+                track_id, title, duration, created_at, album_id,
+                albums:albums!tracks_album_id_fkey(title, cover_url),
+                track_artists:track_artists!track_artists_track_id_fkey(
+                    artists:artists!track_artists_artist_id_fkey(
+                        artist_id,
+                        users:users!artists_artist_id_fkey(name, avatar_url)
+                    )
+                ),
+                track_external_refs!track_external_refs_track_id_fkey(
+                    external_id,
+                    provider_id
+                )
+            `)
+            .in('track_id', trackIds);
+        if (fetchError) throw fetchError;
+
+        // Sort rows to match the similarity order returned by the RPC
+        const sortedRows = (rows || []).sort((a, b) => {
+            return trackIds.indexOf(a.track_id) - trackIds.indexOf(b.track_id);
+        });
+
+        const items = sortedRows.map(row => ({
+            track_id: row.track_id,
+            title: row.title,
+            duration: row.duration,
+            created_at: row.created_at,
+            album: {
+                title: row.albums?.title,
+                cover_url: row.albums?.cover_url,
+            },
+            hls: skipHls ? null : buildHlsPayload(row.track_id),
+            artists: (row.track_artists || []).map(ta => ({
+                artist_id: ta?.artists?.artist_id || null,
+                name: ta?.artists?.users?.name || null,
+                avatar_url: ta?.artists?.users?.avatar_url || null,
+            })),
+            external_refs: row.track_external_refs || null
+        }));
+
+        return { items, total };
+    }
+
+    // Default regular listings (when no search query is specified)
+    const end = start + l - 1;
     let qb = client()
         .from(table)
         .select(`
@@ -346,7 +410,6 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages } 
         .order('created_at', { ascending: false });
     if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
     else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
-    if (q) qb = qb.ilike('title', `%${q}%`);
 
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
@@ -359,7 +422,7 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages } 
             title: row.albums?.title,
             cover_url: row.albums?.cover_url,
         },
-        hls: buildHlsPayload(row.track_id),
+        hls: skipHls ? null : buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
             name: ta?.artists?.users?.name || null,

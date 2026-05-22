@@ -204,8 +204,61 @@ async function deleteAlbum(album_id) {
 async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
-    const end = start + l - 1;
     const languageCodes = normalizeLanguageCodes(preferredLanguages);
+
+    if (q) {
+        // Step 1: Use fuzzy trigram RPC to fetch matching album IDs and total count
+        const { data: matched, error: rpcError } = await client().rpc('search_album_ids', {
+            search_term: q,
+            preferred_languages: languageCodes,
+            limit_val: l,
+            offset_val: start
+        });
+        if (rpcError) throw rpcError;
+
+        if (!matched || matched.length === 0) {
+            return { items: [], total: 0 };
+        }
+
+        const albumIds = matched.map(m => m.album_id);
+        const total = Number(matched[0].total_count || 0);
+
+        // Step 2: Fetch detailed album records for matched IDs
+        const { data: rows, error: fetchError } = await client()
+            .from(table)
+            .select(`
+                album_id, title, cover_url, total_tracks, duration, created_at,
+                album_artists:album_artists!album_artists_album_id_fkey(
+                    role,
+                    artists:artists!album_artists_artist_id_fkey(
+                        artist_id,
+                        users:users!artists_artist_id_fkey(name, avatar_url)
+                    )
+                )
+            `)
+            .in('album_id', albumIds);
+        if (fetchError) throw fetchError;
+
+        // Sort rows to match the similarity order returned by the RPC
+        const sortedRows = (rows || []).sort((a, b) => {
+            return albumIds.indexOf(a.album_id) - albumIds.indexOf(b.album_id);
+        });
+
+        const items = sortedRows.map(row => ({
+            album_id: row.album_id,
+            title: row.title,
+            cover_url: row.cover_url,
+            total_tracks: row.total_tracks,
+            duration: row.duration,
+            created_at: row.created_at,
+            artists: mapArtistsFromAlbumRows(row.album_artists || [])
+        }));
+
+        return { items, total };
+    }
+
+    // Default regular listings (when no search query is specified)
+    const end = start + l - 1;
     // Public list: only published albums, return minimal fields and public artist profile
     let qb = client()
         .from(table)
@@ -224,7 +277,7 @@ async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } 
         .order('created_at', { ascending: false });
     if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
     else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
-    if (q) qb = qb.ilike('title', `%${q}%`);
+
     const { data, error, count } = await qb.range(start, end);
     if (error) throw error;
     const items = (data || []).map(row => ({
