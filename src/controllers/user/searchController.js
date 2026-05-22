@@ -85,19 +85,19 @@ async function searchAll(req, res) {
         const limitPlaylists = Math.min(100, Math.max(1, Number(req.query.limitPlaylists) || Number(req.query.limit) || 5));
 
         const [tracksResult, albumsResult, artistsResult, playlistsResult] = await Promise.all([
-            listTracksUser({ limit: limitTracks, offset: 0, q, skipHls: true }).catch(err => {
+            listTracksUser({ limit: limitTracks, offset, q, skipHls: true }).catch(err => {
                 console.error('Unified search - tracks failed:', err.message || err);
                 return { items: [], total: 0 };
             }),
-            listAlbumsUser({ limit: limitAlbums, offset: 0, q }).catch(err => {
+            listAlbumsUser({ limit: limitAlbums, offset, q }).catch(err => {
                 console.error('Unified search - albums failed:', err.message || err);
                 return { items: [], total: 0 };
             }),
-            listArtistsUser({ limit: limitArtists, offset: 0, q }).catch(err => {
+            listArtistsUser({ limit: limitArtists, offset, q }).catch(err => {
                 console.error('Unified search - artists failed:', err.message || err);
                 return { items: [], total: 0 };
             }),
-            listPlaylistsUser({ limit: limitPlaylists, offset: 0, q }).catch(err => {
+            listPlaylistsUser({ limit: limitPlaylists, offset, q }).catch(err => {
                 console.error('Unified search - playlists failed:', err.message || err);
                 return { items: [], total: 0 };
             })
