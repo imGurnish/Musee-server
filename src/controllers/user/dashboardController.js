@@ -132,7 +132,7 @@ async function madeForYou(req, res) {
     const playlistsRes = playlistsSettled.status === 'fulfilled' ? playlistsSettled.value : emptyResult;
 
     // Tag them with type if not already (listTracksUser might not have it)
-    const albums = albumsRes.items.map(i => ({ ...i, type: 'album' }));
+    const albums = albumsRes.items.map(i => ({ ...i, type: i.type || 'album' }));
     const tracks = tracksRes.items.map(i => ({ ...i, type: 'track' }));
     const playlists = playlistsRes.items.map(i => ({
         ...i,
@@ -173,6 +173,21 @@ async function madeForYou(req, res) {
     const total = (albumsRes.total || 0) + (tracksRes.total || 0) + (playlistsRes.total || 0);
 
     res.json({ items: contextBoostedItems, total, page, limit });
+}
+
+async function albumsForYou(req, res) {
+    const { limit, page, offset } = parsePagination(req.query);
+    const prefs = await getUserOnboardingPreferences(req.user?.id);
+    const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
+
+    const { items, total } = await listAlbumsUser({ limit, offset, preferredLanguages });
+
+    res.json({
+        items: items.map(item => ({ ...item, type: item.type || 'album' })),
+        total,
+        page,
+        limit,
+    });
 }
 
 async function trending(req, res) {
@@ -231,4 +246,4 @@ async function trending(req, res) {
     res.json({ items, total, page, limit });
 }
 
-module.exports = { madeForYou, trending };
+module.exports = { madeForYou, albumsForYou, trending };

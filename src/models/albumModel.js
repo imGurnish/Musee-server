@@ -9,6 +9,19 @@ function client() {
     return supabaseAdmin || supabase;
 }
 
+function mapArtistsFromAlbumRows(rows = []) {
+    return rows.map(a => ({
+        artist_id: a?.artists?.artist_id || null,
+        role: a?.role || null,
+        name: a?.artists?.users?.name || null,
+        avatar_url: a?.artists?.users?.avatar_url || null,
+    }));
+}
+
+function isActualAlbum(row) {
+    return Number(row?.total_tracks) > 1;
+}
+
 function sanitizeAlbumInsert(payload = {}) {
     const out = {};
     // Allow creating an "empty" album with default title
@@ -197,7 +210,7 @@ async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } 
     let qb = client()
         .from(table)
         .select(`
-            album_id, title, cover_url, duration, created_at,
+            album_id, title, cover_url, total_tracks, duration, created_at,
             album_artists:album_artists!album_artists_album_id_fkey(
                 role,
                 artists:artists!album_artists_artist_id_fkey(
@@ -217,16 +230,12 @@ async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } 
         album_id: row.album_id,
         title: row.title,
         cover_url: row.cover_url,
+        total_tracks: row.total_tracks,
         duration: row.duration,
         created_at: row.created_at,
-        artists: (row.album_artists || []).map(a => ({
-            artist_id: a?.artists?.artist_id || null,
-            name: a?.artists?.users?.name || null,
-            avatar_url: a?.artists?.users?.avatar_url || null,
-            role: a?.role || null,
-        }))
+        artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items, total: count };
+    return { items: items.filter(isActualAlbum), total: count };
 }
 
 async function getAlbumUser(album_id) {
@@ -352,7 +361,7 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
     let qb = client()
         .from(table)
         .select(`
-            album_id, title, cover_url, duration, created_at,
+            album_id, title, cover_url, total_tracks, duration, created_at,
             album_artists:album_artists!inner(
                 role,
                 artists:artists!album_artists_artist_id_fkey(
@@ -371,16 +380,12 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
         album_id: row.album_id,
         title: row.title,
         cover_url: row.cover_url,
+        total_tracks: row.total_tracks,
         duration: row.duration,
         created_at: row.created_at,
-        artists: (row.album_artists || []).map(a => ({
-            artist_id: a?.artists?.artist_id || null,
-            name: a?.artists?.users?.name || null,
-            avatar_url: a?.artists?.users?.avatar_url || null,
-            role: a?.role || null,
-        }))
+        artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items, total: count };
+    return { items: items.filter(isActualAlbum), total: count };
 }
 
 module.exports.listAlbumsByArtist = listAlbumsByArtist;
@@ -395,7 +400,7 @@ async function listTrendingAlbumsUser({ limit = 20, offset = 0, preferredLanguag
     let qb = client()
         .from(table)
         .select(`
-            album_id, title, cover_url, duration, created_at, likes_count,
+            album_id, title, cover_url, total_tracks, duration, created_at, likes_count,
             album_artists:album_artists!album_artists_album_id_fkey(
                 role,
                 artists:artists!album_artists_artist_id_fkey(
@@ -417,16 +422,12 @@ async function listTrendingAlbumsUser({ limit = 20, offset = 0, preferredLanguag
         album_id: row.album_id,
         title: row.title,
         cover_url: row.cover_url,
+        total_tracks: row.total_tracks,
         duration: row.duration,
         created_at: row.created_at,
-        artists: (row.album_artists || []).map(a => ({
-            artist_id: a?.artists?.artist_id || null,
-            name: a?.artists?.users?.name || null,
-            avatar_url: a?.artists?.users?.avatar_url || null,
-            role: a?.role || null,
-        }))
+        artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items, total: count };
+    return { items: items.filter(isActualAlbum), total: count };
 }
 
 module.exports.listTrendingAlbumsUser = listTrendingAlbumsUser;
