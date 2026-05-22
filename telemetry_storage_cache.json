@@ -1,0 +1,47 @@
+{
+  "azure": {
+    "enabled": true,
+    "container": "musee",
+    "blobs": 144763,
+    "bytes": 21990704238,
+    "byPrefix": {
+      "hls": {
+        "count": 144763,
+        "bytes": 21990704238
+      },
+      "audio": {
+        "count": 0,
+        "bytes": 0
+      },
+      "other": {
+        "count": 0,
+        "bytes": 0
+      }
+    }
+  },
+  "supabaseStorage": {
+    "enabled": true,
+    "buckets": [
+      {
+        "bucket": "avatars",
+        "objects": 777,
+        "bytes": 35607877
+      },
+      {
+        "bucket": "covers",
+        "objects": 1304,
+        "bytes": 59490857
+      },
+      {
+        "bucket": "videos",
+        "objects": 3,
+        "bytes": 0
+      }
+    ],
+    "totals": {
+      "objects": 2084,
+      "bytes": 95098734
+    }
+  },
+  "lastRefreshedAt": "2026-05-22T08:42:13.821Z"
+}
