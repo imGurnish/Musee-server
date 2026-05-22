@@ -220,6 +220,7 @@ async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } 
             )
         `, { count: 'exact' })
         .eq('is_published', true)
+        .gt('total_tracks', 1)
         .order('created_at', { ascending: false });
     if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
     else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
@@ -235,7 +236,7 @@ async function listAlbumsUser({ limit = 20, offset = 0, q, preferredLanguages } 
         created_at: row.created_at,
         artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items: items.filter(isActualAlbum), total: count };
+    return { items, total: count };
 }
 
 async function getAlbumUser(album_id) {
@@ -371,6 +372,7 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
             )
         `, { count: 'exact' })
         .eq('is_published', true)
+        .gt('total_tracks', 1)
         .eq('album_artists.artist_id', artist_id)
         .order('created_at', { ascending: false });
     if (q) qb = qb.ilike('title', `%${q}%`);
@@ -385,7 +387,7 @@ async function listAlbumsByArtistUser({ artist_id, limit = 20, offset = 0, q } =
         created_at: row.created_at,
         artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items: items.filter(isActualAlbum), total: count };
+    return { items, total: count };
 }
 
 module.exports.listAlbumsByArtist = listAlbumsByArtist;
@@ -410,6 +412,7 @@ async function listTrendingAlbumsUser({ limit = 20, offset = 0, preferredLanguag
             )
         `, { count: 'exact' })
         .eq('is_published', true)
+        .gt('total_tracks', 1)
         .order('likes_count', { ascending: false })
         .order('created_at', { ascending: false });
     if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
@@ -427,7 +430,7 @@ async function listTrendingAlbumsUser({ limit = 20, offset = 0, preferredLanguag
         created_at: row.created_at,
         artists: mapArtistsFromAlbumRows(row.album_artists || [])
     }));
-    return { items: items.filter(isActualAlbum), total: count };
+    return { items, total: count };
 }
 
 module.exports.listTrendingAlbumsUser = listTrendingAlbumsUser;
