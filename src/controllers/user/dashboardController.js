@@ -2,7 +2,8 @@ const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumMo
 const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
-const db = require('../../utils/supabaseClient');
+const { supabase, supabaseAdmin } = require('../../db/config');
+const db = supabaseAdmin || supabase;
 
 function parsePagination(query) {
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
