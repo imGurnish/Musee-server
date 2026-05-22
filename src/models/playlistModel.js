@@ -210,17 +210,52 @@ async function deletePlaylist(playlist_id) {
 async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
+
+    if (q) {
+        // Step 1: Use fuzzy trigram RPC to fetch matching playlist IDs and total count
+        const { data: matched, error: rpcError } = await client().rpc('search_playlist_ids', {
+            search_term: q,
+            limit_val: l,
+            offset_val: start
+        });
+        if (rpcError) throw rpcError;
+
+        if (!matched || matched.length === 0) {
+            return { items: [], total: 0 };
+        }
+
+        const playlistIds = matched.map(m => m.playlist_id);
+        const total = Number(matched[0].total_count || 0);
+
+        // Step 2: Fetch detailed playlist records for matched IDs
+        const { data: rows, error: fetchError } = await client()
+            .from(table)
+            .select(`
+                playlist_id, name, creator_id, cover_url, language_code, duration, total_tracks, likes_count, created_at, updated_at,
+                users:users!playlists_creator_id_fkey(user_id, name, avatar_url)
+            `)
+            .in('playlist_id', playlistIds);
+        if (fetchError) throw fetchError;
+
+        // Sort rows to match the similarity order returned by the RPC
+        const sortedRows = (rows || []).sort((a, b) => {
+            return playlistIds.indexOf(a.playlist_id) - playlistIds.indexOf(b.playlist_id);
+        });
+
+        return { items: sortedRows.map(mapPlaylistSummary), total };
+    }
+
+    // Default regular listings (when no search query is specified)
     const end = start + l - 1;
-    let qb = client()
+    const { data, error, count } = await client()
         .from(table)
         .select(`
             playlist_id, name, creator_id, cover_url, language_code, duration, total_tracks, likes_count, created_at, updated_at,
             users:users!playlists_creator_id_fkey(user_id, name, avatar_url)
         `, { count: 'exact' })
         .eq('is_public', true)
-        .order('created_at', { ascending: false });
-    if (q) qb = qb.ilike('name', `%${q}%`);
-    const { data, error, count } = await qb.range(start, end);
+        .order('created_at', { ascending: false })
+        .range(start, end);
     if (error) throw error;
     return { items: (data || []).map(mapPlaylistSummary), total: count || 0 };
 }

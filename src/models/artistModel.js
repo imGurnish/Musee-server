@@ -229,36 +229,85 @@ async function deleteArtists(artist_ids) {
 async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
-    const end = start + l - 1;
 
-    // Search users first (because name lives in users table)
-    let qb = client()
-        .from("users")
-        .select(`
-      user_id,
-      name,
-      avatar_url,
-      artists:artists!artists_artist_id_fkey (
-        bio,
-        cover_url,
-        debut_year,
-        is_verified,
-        monthly_listeners
-      )
-    `, { count: "exact" })
-        .eq("user_type", "artist") // Only artist users
-        .order("created_at", { ascending: false });
-
-    // Search by user name
     if (q) {
-        qb = qb.ilike("name", `%${q}%`);
+        // Step 1: Use fuzzy trigram RPC to fetch matching artist IDs and total count
+        const { data: matched, error: rpcError } = await client().rpc('search_artist_ids', {
+            search_term: q,
+            limit_val: l,
+            offset_val: start
+        });
+        if (rpcError) throw rpcError;
+
+        if (!matched || matched.length === 0) {
+            return { items: [], total: 0 };
+        }
+
+        const artistIds = matched.map(m => m.artist_id);
+        const total = Number(matched[0].total_count || 0);
+
+        // Step 2: Fetch detailed user & artist profile records for matched IDs
+        const { data: rows, error: fetchError } = await client()
+            .from("users")
+            .select(`
+                user_id,
+                name,
+                avatar_url,
+                artists:artists!artists_artist_id_fkey (
+                    bio,
+                    cover_url,
+                    debut_year,
+                    is_verified,
+                    monthly_listeners
+                )
+            `)
+            .in('user_id', artistIds);
+        if (fetchError) throw fetchError;
+
+        // Sort rows to match the similarity order returned by the RPC
+        const sortedRows = (rows || []).sort((a, b) => {
+            return artistIds.indexOf(a.user_id) - artistIds.indexOf(b.user_id);
+        });
+
+        const items = sortedRows.map(row => ({
+            artist_id: row.user_id, // same as artist_id in artists table
+            name: row.name,
+            avatar_url: row.avatar_url,
+            cover_url: row.artists?.cover_url ?? null,
+            bio: row.artists?.bio ?? null,
+            genres: [],
+            debut_year: row.artists?.debut_year ?? null,
+            is_verified: row.artists?.is_verified ?? false,
+            monthly_listeners: row.artists?.monthly_listeners ?? 0,
+        }));
+
+        return { items, total };
     }
 
-    const { data, error, count } = await qb.range(start, end);
+    // Default regular listings (when no search query is specified)
+    const end = start + l - 1;
+    // Search users first (because name lives in users table)
+    const { data, error, count } = await client()
+        .from("users")
+        .select(`
+            user_id,
+            name,
+            avatar_url,
+            artists:artists!artists_artist_id_fkey (
+                bio,
+                cover_url,
+                debut_year,
+                is_verified,
+                monthly_listeners
+            )
+        `, { count: "exact" })
+        .eq("user_type", "artist") // Only artist users
+        .order("created_at", { ascending: false })
+        .range(start, end);
     if (error) throw error;
 
     // Build final artist response
-    const items = data.map(row => ({
+    const items = (data || []).map(row => ({
         artist_id: row.user_id, // same as artist_id in artists table
         name: row.name,
         avatar_url: row.avatar_url,
