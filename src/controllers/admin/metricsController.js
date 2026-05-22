@@ -1,11 +1,70 @@
+const os = require('os');
+const fs = require('fs/promises');
+const path = require('path');
 const { blobServiceClient, containerName, supabase, supabaseAdmin } = require('../../db/config');
+
+// In-memory cache for storage telemetry
+let cachedStorageMetrics = null;
+let isStorageRefreshing = false;
+let lastStorageRefreshedAt = null;
+
+const CACHE_FILE_PATH = path.join(process.cwd(), 'telemetry_storage_cache.json');
+
+// Initialize cache from disk on startup
+async function initStorageCache() {
+    try {
+        const data = await fs.readFile(CACHE_FILE_PATH, 'utf8');
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.azure && parsed.supabaseStorage) {
+            cachedStorageMetrics = parsed;
+            if (parsed.lastRefreshedAt) {
+                lastStorageRefreshedAt = new Date(parsed.lastRefreshedAt);
+            }
+            console.log('[Telemetry] Loaded storage metrics cache from disk successfully.');
+            return;
+        }
+    } catch (err) {
+        // Cache file doesn't exist or is invalid; ignore and populate placeholders
+        console.log('[Telemetry] No valid disk cache found. Initializing storage placeholders.');
+    }
+
+    // Default placeholders to avoid client decoding/parsing crashes
+    cachedStorageMetrics = {
+        azure: {
+            enabled: !!blobServiceClient,
+            container: containerName || 'media',
+            blobs: 0,
+            bytes: 0,
+            byPrefix: {
+                hls: { count: 0, bytes: 0 },
+                audio: { count: 0, bytes: 0 },
+                other: { count: 0, bytes: 0 }
+            },
+            message: "Initial telemetry scan queued in the background."
+        },
+        supabaseStorage: {
+            enabled: !!(supabaseAdmin && supabaseAdmin.storage),
+            buckets: [],
+            totals: { objects: 0, bytes: 0 },
+            message: "Initial telemetry scan queued in the background."
+        }
+    };
+}
+
+// Call init on load
+initStorageCache().catch(err => {
+    console.error('[Telemetry] Failed to initialize storage cache:', err);
+});
 
 async function azureMetrics() {
     if (!blobServiceClient) return { enabled: false };
     const container = blobServiceClient.getContainerClient(containerName);
+    console.log('[Telemetry] Scanning Azure Blob Storage...');
+    const start = Date.now();
     let totalBytes = 0n;
     let totalCount = 0;
     let byPrefix = { hls: { bytes: 0n, count: 0 }, audio: { bytes: 0n, count: 0 }, other: { bytes: 0n, count: 0 } };
+    
     for await (const blob of container.listBlobsFlat()) {
         const size = BigInt(blob.properties.contentLength || 0);
         totalBytes += size;
@@ -14,8 +73,14 @@ async function azureMetrics() {
         if (name.startsWith('hls/')) { byPrefix.hls.bytes += size; byPrefix.hls.count += 1; }
         else if (name.startsWith('audio/')) { byPrefix.audio.bytes += size; byPrefix.audio.count += 1; }
         else { byPrefix.other.bytes += size; byPrefix.other.count += 1; }
+        
+        if (totalCount % 10000 === 0) {
+            console.log(`[Telemetry] Azure background scanner listed ${totalCount} blobs...`);
+        }
     }
-    const toNum = (n) => Number(n); // may overflow >2^53, but acceptable for dashboards
+    
+    console.log(`[Telemetry] Azure scan completed in ${Date.now() - start}ms. Total blobs: ${totalCount}`);
+    const toNum = (n) => Number(n);
     return {
         enabled: true,
         container: containerName,
@@ -32,12 +97,16 @@ async function azureMetrics() {
 async function supabaseStorageMetrics() {
     const client = supabaseAdmin;
     if (!client || !client.storage) return { enabled: false };
+    console.log('[Telemetry] Scanning Supabase Storage buckets...');
+    const start = Date.now();
+    
     const { data: buckets, error } = await client.storage.listBuckets();
     if (error) return { enabled: true, error: error.message };
 
     async function sumBucket(bucket) {
         let totalBytes = 0;
         let totalCount = 0;
+        
         async function walk(prefix = '') {
             let offset = 0;
             const limit = 1000;
@@ -45,21 +114,27 @@ async function supabaseStorageMetrics() {
                 const { data, error } = await client.storage.from(bucket.name).list(prefix, { limit, offset });
                 if (error) break;
                 if (!data || data.length === 0) break;
+                
                 for (const entry of data) {
                     if (entry.id) {
-                        // file
+                        // It's a file
                         totalCount += 1;
                         const sz = entry?.metadata?.size;
                         if (typeof sz === 'number') totalBytes += sz;
-                    } else if (entry.name && entry.name.endsWith('/')) {
-                        await walk(prefix ? `${prefix}${entry.name}` : entry.name);
+                    } else if (entry.name) {
+                        // It's a folder/directory (id is null)
+                        const folderPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+                        await walk(folderPath);
                     }
                 }
                 if (data.length < limit) break;
                 offset += limit;
             }
         }
-        try { await walk(''); } catch { }
+        
+        try { await walk(''); } catch (walkErr) {
+            console.error(`[Telemetry] Supabase walk error on bucket ${bucket.name}:`, walkErr);
+        }
         return { bucket: bucket.name, objects: totalCount, bytes: totalBytes };
     }
 
@@ -67,7 +142,9 @@ async function supabaseStorageMetrics() {
     for (const b of buckets || []) {
         results.push(await sumBucket(b));
     }
+    
     const totals = results.reduce((acc, r) => ({ objects: acc.objects + r.objects, bytes: acc.bytes + r.bytes }), { objects: 0, bytes: 0 });
+    console.log(`[Telemetry] Supabase Storage scan completed in ${Date.now() - start}ms.`);
     return { enabled: true, buckets: results, totals };
 }
 
@@ -84,29 +161,152 @@ async function countTable(client, table) {
 async function dbMetrics() {
     const client = supabaseAdmin || supabase;
     const tables = ['users', 'artists', 'albums', 'tracks', 'playlists', 'followers', 'album_artists', 'track_artists', 'playlist_tracks'];
-    const counts = [];
-    for (const t of tables) counts.push(await countTable(client, t));
+    const counts = await Promise.all(tables.map(t => countTable(client, t)));
     return { tables: counts };
+}
+
+async function serverMetrics() {
+    try {
+        const platform = os.platform();
+        const arch = os.arch();
+        const release = os.release();
+        const hostname = os.hostname();
+        
+        const cpus = os.cpus();
+        const cpuModel = cpus.length > 0 ? cpus[0].model : 'Unknown';
+        const cpuCores = cpus.length;
+        
+        const hostTotal = os.totalmem();
+        const hostFree = os.freemem();
+        const hostUsed = hostTotal - hostFree;
+        const hostUsagePct = hostTotal > 0 ? Number(((hostUsed / hostTotal) * 100).toFixed(2)) : 0;
+        
+        const memUsage = process.memoryUsage();
+        
+        const uptime = os.uptime();
+        const processUptime = process.uptime();
+        
+        let disk = null;
+        try {
+            const stats = await fs.statfs(process.cwd());
+            const total = Number(stats.blocks * stats.bsize);
+            const free = Number(stats.bfree * stats.bsize);
+            const used = total - free;
+            const usagePct = total > 0 ? Number(((used / total) * 100).toFixed(2)) : 0;
+            disk = {
+                total,
+                free,
+                used,
+                usagePct
+            };
+        } catch (diskErr) {
+            // Quietly warning is fine, won't crash telemetry
+        }
+        
+        return {
+            platform,
+            arch,
+            release,
+            hostname,
+            cpuModel,
+            cpuCores,
+            uptime,
+            processUptime,
+            memory: {
+                hostTotal,
+                hostFree,
+                hostUsed,
+                hostUsagePct,
+                processRss: memUsage.rss,
+                processHeapTotal: memUsage.heapTotal,
+                processHeapUsed: memUsage.heapUsed,
+                processExternal: memUsage.external
+            },
+            disk
+        };
+    } catch (e) {
+        return { error: e?.message || String(e) };
+    }
+}
+
+// Background storage metrics refresher
+async function refreshStorageMetrics() {
+    if (isStorageRefreshing) return;
+    isStorageRefreshing = true;
+    console.log('[Telemetry] Starting background storage metrics scan...');
+    const start = Date.now();
+    try {
+        const [azure, supabaseStorage] = await Promise.all([
+            azureMetrics().catch(e => ({ enabled: false, error: e?.message || String(e) })),
+            supabaseStorageMetrics().catch(e => ({ enabled: false, error: e?.message || String(e) }))
+        ]);
+        
+        cachedStorageMetrics = {
+            azure,
+            supabaseStorage
+        };
+        lastStorageRefreshedAt = new Date();
+        
+        // Save cache to disk to survive server restarts
+        const payloadToSave = {
+            ...cachedStorageMetrics,
+            lastRefreshedAt: lastStorageRefreshedAt.toISOString()
+        };
+        await fs.writeFile(CACHE_FILE_PATH, JSON.stringify(payloadToSave, null, 2), 'utf8');
+        console.log(`[Telemetry] Background storage metrics updated and saved to disk in ${Date.now() - start}ms`);
+    } catch (err) {
+        console.error('[Telemetry] Background storage metrics scan failed:', err);
+    } finally {
+        isStorageRefreshing = false;
+    }
 }
 
 // GET /api/admin/metrics
 async function getUsage(req, res) {
-    const [azure, storage, db] = await Promise.all([
-        azureMetrics().catch(e => ({ enabled: false, error: e?.message || String(e) })),
-        supabaseStorageMetrics().catch(e => ({ enabled: false, error: e?.message || String(e) })),
-        dbMetrics().catch(e => ({ error: e?.message || String(e) })),
-    ]);
-    res.json({
-        timestamp: new Date().toISOString(),
-        azure,
-        supabaseStorage: storage,
-        database: db,
-        env: {
-            supabaseUrl: process.env.SUPABASE_URL || null,
-            azureContainer: containerName || null,
-        }
-    });
+    const forceRefresh = req.query.refresh === 'true';
+    
+    if (forceRefresh && !isStorageRefreshing) {
+        console.log('[Telemetry] Client triggered a manual storage metrics refresh...');
+        refreshStorageMetrics(); // Run asynchronously in the background, don't await!
+    }
+
+    try {
+        const start = Date.now();
+        // Fetch fast metrics in parallel (takes ~50-150ms max)
+        const [database, system] = await Promise.all([
+            dbMetrics(),
+            serverMetrics()
+        ]);
+        
+        // Ensure azure and supabaseStorage are fully structured
+        const responseData = {
+            timestamp: new Date().toISOString(),
+            azure: cachedStorageMetrics.azure,
+            supabaseStorage: cachedStorageMetrics.supabaseStorage,
+            database,
+            system,
+            isRefreshing: isStorageRefreshing,
+            lastRefreshedAt: lastStorageRefreshedAt ? lastStorageRefreshedAt.toISOString() : null,
+            env: {
+                supabaseUrl: process.env.SUPABASE_URL || null,
+                azureContainer: containerName || null,
+            }
+        };
+        
+        // console.log(`[Telemetry] Telemetry response served in ${Date.now() - start}ms`);
+        return res.json(responseData);
+    } catch (error) {
+        console.error('[Telemetry] Error preparing telemetry response:', error);
+        return res.status(500).json({
+            error: 'Failed to retrieve system metrics',
+            details: error?.message || String(error)
+        });
+    }
 }
+
+// Schedules
+setTimeout(refreshStorageMetrics, 5000); // 5s after startup to keep initial boot lightning fast
+setInterval(refreshStorageMetrics, 6 * 60 * 60 * 1000); // Refresh every 6 hours
 
 // GET /api/admin/metrics/engagement
 async function getEngagementMetrics(req, res) {
@@ -122,7 +322,6 @@ async function getEngagementMetrics(req, res) {
 }
 
 // POST /api/admin/metrics/refresh-trending
-// Replaces pg_cron: call this from an external scheduler or manually
 async function refreshTrending(req, res) {
     try {
         const client = supabaseAdmin || supabase;
