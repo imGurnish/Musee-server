@@ -3,6 +3,8 @@ const fs = require('fs/promises');
 const path = require('path');
 const { blobServiceClient, containerName, supabase, supabaseAdmin } = require('../../db/config');
 
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 // In-memory cache for storage telemetry
 let cachedStorageMetrics = null;
 let isStorageRefreshing = false;
@@ -40,13 +42,17 @@ async function initStorageCache() {
                 audio: { count: 0, bytes: 0 },
                 other: { count: 0, bytes: 0 }
             },
-            message: "Initial telemetry scan queued in the background."
+            message: isDevelopment
+                ? 'Telemetry scan is disabled in development mode.'
+                : 'Initial telemetry scan queued in the background.'
         },
         supabaseStorage: {
             enabled: !!(supabaseAdmin && supabaseAdmin.storage),
             buckets: [],
             totals: { objects: 0, bytes: 0 },
-            message: "Initial telemetry scan queued in the background."
+            message: isDevelopment
+                ? 'Telemetry scan is disabled in development mode.'
+                : 'Initial telemetry scan queued in the background.'
         }
     };
 }
@@ -265,7 +271,7 @@ async function refreshStorageMetrics() {
 async function getUsage(req, res) {
     const forceRefresh = req.query.refresh === 'true';
     
-    if (forceRefresh && !isStorageRefreshing) {
+    if (forceRefresh && !isStorageRefreshing && !isDevelopment) {
         console.log('[Telemetry] Client triggered a manual storage metrics refresh...');
         refreshStorageMetrics(); // Run asynchronously in the background, don't await!
     }
@@ -305,8 +311,10 @@ async function getUsage(req, res) {
 }
 
 // Schedules
-setTimeout(refreshStorageMetrics, 5000); // 5s after startup to keep initial boot lightning fast
-setInterval(refreshStorageMetrics, 6 * 60 * 60 * 1000); // Refresh every 6 hours
+if (!isDevelopment) {
+    setTimeout(refreshStorageMetrics, 5000); // 5s after startup to keep initial boot lightning fast
+    setInterval(refreshStorageMetrics, 6 * 60 * 60 * 1000); // Refresh every 6 hours
+}
 
 // GET /api/admin/metrics/engagement
 async function getEngagementMetrics(req, res) {

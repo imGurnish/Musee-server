@@ -91,28 +91,25 @@ const LANGUAGE_NAME_TO_CODE = {
   english: 'en',
   hindi: 'hi',
   punjabi: 'pa',
-  bengali: 'bn',
-  tamil: 'ta',
-  telugu: 'te',
-  marathi: 'mr',
-  gujarati: 'gu',
-  urdu: 'ur',
-  malayalam: 'ml',
-  kannada: 'kn'
+  gujarati: 'gj',
+  haryanvi: 'hn',
+  marathi: 'mr'
 };
+
+const SUPPORTED_LANGUAGE_CODES = new Set(['en', 'gj', 'hi', 'hn', 'mr', 'pa']);
 
 function normalizeLanguageCode(input) {
   if (typeof input !== 'string') return null;
   const value = input.trim().toLowerCase();
   if (!value) return null;
-  if (/^[a-z]{2,3}(-[a-z]{2})?$/.test(value)) return value;
-  return LANGUAGE_NAME_TO_CODE[value] || null;
+  if (SUPPORTED_LANGUAGE_CODES.has(value)) return value;
+  const mapped = LANGUAGE_NAME_TO_CODE[value] || null;
+  return mapped && SUPPORTED_LANGUAGE_CODES.has(mapped) ? mapped : null;
 }
 
 function languageNameFromCodeOrInput(code, input) {
   const codeToName = {
-    en: 'English', hi: 'Hindi', pa: 'Punjabi', bn: 'Bengali', ta: 'Tamil', te: 'Telugu',
-    mr: 'Marathi', gu: 'Gujarati', ur: 'Urdu', ml: 'Malayalam', kn: 'Kannada'
+    en: 'English', gj: 'Gujarati', hi: 'Hindi', hn: 'Haryanvi', mr: 'Marathi', pa: 'Punjabi'
   };
   if (codeToName[code]) return codeToName[code];
   if (typeof input === 'string' && input.trim()) {
@@ -120,6 +117,31 @@ function languageNameFromCodeOrInput(code, input) {
     return v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
   }
   return 'Unknown';
+}
+
+function resolveTrackLanguage(rawSong) {
+  const candidates = [
+    rawSong?.language,
+    rawSong?.more_info?.language,
+    rawSong?.language_code,
+    rawSong?.more_info?.language_code
+  ];
+
+  for (const candidate of candidates) {
+    const languageCode = normalizeLanguageCode(candidate);
+    if (languageCode) {
+      return {
+        languageCode,
+        languageName: languageNameFromCodeOrInput(languageCode, candidate)
+      };
+    }
+  }
+
+  return {
+    languageCode: null,
+    languageName: null,
+    rawLanguage: candidates.find((candidate) => typeof candidate === 'string' && candidate.trim()) || null
+  };
 }
 
 async function ensureLanguageExists(languageCode, languageName) {
@@ -556,6 +578,7 @@ function normalizeTrackPayload(rawData, trackId) {
   const rawSong = rawData?.[trackId] || rawData?.songs?.[trackId] || rawData;
   const artist = firstArtistFromTrack(rawSong || {});
   const artistCandidates = extractTrackArtistCandidates(rawSong || {});
+  const trackLanguage = resolveTrackLanguage(rawSong || {});
 
   const albumId = String(
     rawSong?.albumid ||
@@ -571,7 +594,8 @@ function normalizeTrackPayload(rawData, trackId) {
     id: String(rawSong?.id || trackId || '').trim(),
     title,
     duration: toInt(rawSong?.duration, 0),
-    language: safeText(rawSong?.language, null),
+    languageCode: trackLanguage.languageCode,
+    languageName: trackLanguage.languageName,
     isExplicit: rawSong?.explicit_content === 1 || rawSong?.explicit_content === '1',
     trackNumber: toInt(rawSong?.more_info?.label_id || rawSong?.position || rawSong?.track_number, 0) || null,
     albumId,
@@ -904,8 +928,8 @@ async function ensureAlbumImportedShell(albumExternalId, options = {}) {
     : await ensureArtistImported(resolvedArtistExternalId, resolvedArtistName, options);
 
   const tx = await executeTransaction(async (tracker) => {
-    const languageCode = normalizeLanguageCode(normalized.language);
-    await ensureLanguageExists(languageCode, languageNameFromCodeOrInput(languageCode, normalized.language));
+    const languageCode = normalized.languageCode;
+    await ensureLanguageExists(languageCode, normalized.languageName);
 
     const album = await createAndTrack(tracker, 'albums', {
       title: normalized.title,
@@ -1274,6 +1298,13 @@ async function importTrackById(trackId, options = {}) {
     albumExternalId: normalized.albumId
   });
 
+  if (!normalized.languageCode) {
+    throw new Error(
+      `Unsupported JioSaavn track language "${normalized.rawLanguage || 'unknown'}". ` +
+      'Supported languages are English, Gujarati, Hindi, Haryanvi, Marathi, and Punjabi.'
+    );
+  }
+
   const shouldExpandAlbum = !options.skipFullAlbumExpansion && Boolean(normalized.albumId);
   if (shouldExpandAlbum) {
     const completedAlbumImports = getCompletedAlbumImportSet(options);
@@ -1417,8 +1448,15 @@ async function importTrackById(trackId, options = {}) {
   }
 
   const tx = await executeTransaction(async (tracker) => {
-    const languageCode = normalizeLanguageCode(normalized.language);
-    await ensureLanguageExists(languageCode, languageNameFromCodeOrInput(languageCode, normalized.language));
+    const languageCode = normalized.languageCode;
+    await ensureLanguageExists(languageCode, normalized.languageName);
+
+    if (!languageCode) {
+      throw new Error(
+        `Unsupported JioSaavn track language "${normalized.rawLanguage || 'unknown'}". ` +
+        'Supported languages are English, Gujarati, Hindi, Haryanvi, Marathi, and Punjabi.'
+      );
+    }
 
     const track = await createAndTrack(tracker, 'tracks', {
       album_id: albumId,
@@ -1459,7 +1497,7 @@ async function importTrackById(trackId, options = {}) {
       rawPayload: remoteTrack,
       extra: {
         external_album_id: normalized.albumId,
-        language: normalized.language,
+        language: normalized.languageCode,
         encrypted_media_url: normalized.downloadUrl,
         media_preview_url: normalized.previewUrl
       }
@@ -1575,7 +1613,6 @@ async function importPlaylistById(playlistId, options = {}) {
         name: normalized.name,
         description: normalized.description,
         cover_url: normalized.image || DEFAULTS.playlistCover,
-        language_code: normalizeLanguageCode(normalized.language),
         total_tracks: normalized.totalTracks,
         likes_count: 0,
         is_public: false,

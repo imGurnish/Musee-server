@@ -25,29 +25,21 @@ const LANGUAGE_NAME_TO_CODE = {
     english: 'en',
     hindi: 'hi',
     punjabi: 'pa',
-    bengali: 'bn',
-    tamil: 'ta',
-    telugu: 'te',
+    gujarati: 'gj',
+    haryanvi: 'hn',
     marathi: 'mr',
-    gujarati: 'gu',
-    urdu: 'ur',
-    malayalam: 'ml',
-    kannada: 'kn',
 };
 
 const LANGUAGE_CODE_TO_NAME = {
     en: 'English',
+    gj: 'Gujarati',
     hi: 'Hindi',
+    hn: 'Haryanvi',
     pa: 'Punjabi',
-    bn: 'Bengali',
-    ta: 'Tamil',
-    te: 'Telugu',
     mr: 'Marathi',
-    gu: 'Gujarati',
-    ur: 'Urdu',
-    ml: 'Malayalam',
-    kn: 'Kannada',
 };
+
+const SUPPORTED_LANGUAGE_CODES = new Set(['en', 'gj', 'hi', 'hn', 'mr', 'pa']);
 
 function toTitleCase(input) {
     return String(input || '')
@@ -65,15 +57,19 @@ function normalizeLanguage(input) {
     const lower = raw.toLowerCase();
     if (LANGUAGE_NAME_TO_CODE[lower]) {
         const code = LANGUAGE_NAME_TO_CODE[lower];
-        return { code, name: LANGUAGE_CODE_TO_NAME[code] || toTitleCase(raw) };
+        return SUPPORTED_LANGUAGE_CODES.has(code)
+            ? { code, name: LANGUAGE_CODE_TO_NAME[code] || toTitleCase(raw) }
+            : null;
     }
 
     if (/^[a-z]{2,3}(-[a-z]{2})?$/i.test(raw)) {
         const code = lower;
-        return { code, name: LANGUAGE_CODE_TO_NAME[code] || toTitleCase(code) };
+        return SUPPORTED_LANGUAGE_CODES.has(code)
+            ? { code, name: LANGUAGE_CODE_TO_NAME[code] || toTitleCase(code) }
+            : null;
     }
 
-    return { code: lower, name: toTitleCase(raw) };
+    return null;
 }
 
 async function ensureLanguageExists(languageCode, languageName) {
@@ -204,6 +200,11 @@ async function create(req, res) {
     }
 
     const normalizedLanguage = normalizeLanguage(body.language_code);
+    if (body.language_code !== undefined && body.language_code !== null && !normalizedLanguage) {
+        return res.status(400).json({
+            error: 'Unsupported language_code. Supported languages are en, gj, hi, hn, mr, and pa.'
+        });
+    }
     if (normalizedLanguage) {
         await ensureLanguageExists(normalizedLanguage.code, normalizedLanguage.name);
         body.language_code = normalizedLanguage.code;
@@ -328,6 +329,11 @@ async function update(req, res) {
     const body = { ...req.body };
 
     const normalizedLanguage = normalizeLanguage(body.language_code);
+    if (body.language_code !== undefined && body.language_code !== null && !normalizedLanguage) {
+        return res.status(400).json({
+            error: 'Unsupported language_code. Supported languages are en, gj, hi, hn, mr, and pa.'
+        });
+    }
     if (normalizedLanguage) {
         await ensureLanguageExists(normalizedLanguage.code, normalizedLanguage.name);
         body.language_code = normalizedLanguage.code;
