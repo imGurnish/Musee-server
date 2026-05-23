@@ -61,6 +61,7 @@ function mapPlaylistSummary(row) {
         name: row.name,
         creator_id: row.creator_id,
         creator_name: row?.users?.name || null,
+        is_collaborative: !!row.is_collaborative,
         cover_url: row.cover_url,
         language_code: row.language_code,
         duration: row.duration,
@@ -76,12 +77,21 @@ function mapPlaylistDetail(row) {
     if (!row) return null;
     const artists = mapPlaylistArtistFromUser(row?.users, row?.creator_id);
     const tracks = mapPlaylistTracks(row.playlist_tracks);
+    
+    const collaborators = (row.playlist_users || []).map((pu) => ({
+        artist_id: pu.user?.user_id || null,
+        name: pu.user?.name || 'Unknown Collaborator',
+        avatar_url: pu.user?.avatar_url || null,
+        role: pu.role || 'collaborator',
+    })).filter((c) => !!c.artist_id);
+
     return {
         playlist_id: row.playlist_id,
         name: row.name,
         creator_id: row.creator_id,
         creator_name: row?.users?.name || null,
         is_public: !!row.is_public,
+        is_collaborative: !!row.is_collaborative,
         description: row.description,
         cover_url: row.cover_url,
         language_code: row.language_code,
@@ -92,6 +102,7 @@ function mapPlaylistDetail(row) {
         updated_at: row.updated_at,
         artists,
         tracks,
+        collaborators,
     };
 }
 
@@ -111,6 +122,7 @@ function sanitizeInsert(payload = {}) {
     }
 
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
+    if (payload.is_collaborative !== undefined) out.is_collaborative = Boolean(payload.is_collaborative);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
     if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : null;
 
@@ -139,6 +151,7 @@ function sanitizeUpdate(payload = {}) {
         out.creator_id = payload.creator_id;
     }
     if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
+    if (payload.is_collaborative !== undefined) out.is_collaborative = Boolean(payload.is_collaborative);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
     if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : payload.language_code;
 
@@ -167,8 +180,12 @@ async function getPlaylist(playlist_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            playlist_id, name, creator_id, is_public, description, cover_url, language_code, likes_count, total_tracks, duration, created_at, updated_at,
+            playlist_id, name, creator_id, is_public, is_collaborative, description, cover_url, language_code, likes_count, total_tracks, duration, created_at, updated_at,
             users:users!playlists_creator_id_fkey(user_id, name, avatar_url),
+            playlist_users:playlist_users(
+                role,
+                user:users(user_id, name, avatar_url)
+            ),
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 position,
                 tracks:tracks!playlist_tracks_track_id_fkey(
@@ -192,6 +209,14 @@ async function createPlaylist(payload) {
     const input = sanitizeInsert(payload);
     const { data, error } = await client().from(table).insert(input).select('*').single();
     if (error) throw error;
+
+    if (data && data.creator_id) {
+        await client().from('playlist_users').insert({
+            playlist_id: data.playlist_id,
+            user_id: data.creator_id,
+            role: 'creator',
+        });
+    }
     return data;
 }
 
@@ -264,8 +289,12 @@ async function getPlaylistUser(playlist_id) {
     const { data, error } = await client()
         .from(table)
         .select(`
-            playlist_id, name, creator_id, is_public, description, cover_url, language_code, likes_count, duration, total_tracks, created_at, updated_at,
+            playlist_id, name, creator_id, is_public, is_collaborative, description, cover_url, language_code, likes_count, duration, total_tracks, created_at, updated_at,
             users:users!playlists_creator_id_fkey(user_id, name, avatar_url),
+            playlist_users:playlist_users(
+                role,
+                user:users(user_id, name, avatar_url)
+            ),
             playlist_tracks:playlist_tracks!playlist_tracks_playlist_id_fkey(
                 position,
                 tracks:tracks!playlist_tracks_track_id_fkey(
@@ -444,6 +473,20 @@ async function listRecommendedPlaylistsUser({ userId, limit = 20, offset = 0, q,
     };
 }
 
+async function joinPlaylist(playlist_id, user_id) {
+    const { data, error } = await client()
+        .from('playlist_users')
+        .upsert({
+            playlist_id,
+            user_id,
+            role: 'collaborator'
+        }, { onConflict: 'playlist_id,user_id' })
+        .select('*')
+        .single();
+    if (error) throw error;
+    return data;
+}
+
 module.exports = {
     listPlaylists,
     getPlaylist,
@@ -454,4 +497,5 @@ module.exports = {
     listPlaylistsUser,
     listTrendingPlaylistsUser,
     listRecommendedPlaylistsUser,
+    joinPlaylist,
 };

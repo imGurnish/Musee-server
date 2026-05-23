@@ -387,7 +387,8 @@ exports.getLikedTracks = async (req, res) => {
 exports.getRecommendations = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { limit = 50, type = 'discovery', includeReasons = false } = req.query;
+    const { limit = 50, type = 'discovery', includeReasons = false, resolve = 'false' } = req.query;
+    const shouldResolve = resolve === 'true';
 
     // Check cache first
     const { data: cached } = await db
@@ -400,11 +401,23 @@ exports.getRecommendations = async (req, res) => {
 
     if (cached) {
       console.log(`[CACHE HIT] Serving cached recommendations for user ${userId}`);
+      const slicedIds = cached.recommended_track_ids.slice(0, limit);
+      if (shouldResolve) {
+        const { listTracksByIdsUser } = require('../models/trackModel');
+        const tracks = await listTracksByIdsUser(slicedIds);
+        return res.json({
+          success: true,
+          from_cache: true,
+          recommendation_type: type,
+          tracks: tracks,
+          reasons: includeReasons ? cached.reasons : undefined
+        });
+      }
       return res.json({
         success: true,
         from_cache: true,
         recommendation_type: type,
-        track_ids: cached.recommended_track_ids.slice(0, limit),
+        track_ids: slicedIds,
         reasons: includeReasons ? cached.reasons : undefined
       });
     }
@@ -436,11 +449,24 @@ exports.getRecommendations = async (req, res) => {
     // Cache the recommendations
     await cacheRecommendations(userId, type, trackIds, type);
 
+    const slicedIds = trackIds.slice(0, limit);
+    if (shouldResolve) {
+      const { listTracksByIdsUser } = require('../models/trackModel');
+      const tracks = await listTracksByIdsUser(slicedIds);
+      return res.json({
+        success: true,
+        from_cache: false,
+        recommendation_type: type,
+        tracks: tracks,
+        cached_until: new Date(Date.now() + 6 * 60 * 60 * 1000)
+      });
+    }
+
     res.json({
       success: true,
       from_cache: false,
       recommendation_type: type,
-      track_ids: trackIds.slice(0, limit),
+      track_ids: slicedIds,
       cached_until: new Date(Date.now() + 6 * 60 * 60 * 1000) // 6 hours
     });
   } catch (error) {

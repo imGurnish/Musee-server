@@ -17,4 +17,7 @@ router.delete('/:id', ctrl.remove);
 router.post('/:id/tracks', ctrl.addTrack);
 router.delete('/:id/tracks/:trackId', ctrl.removeTrack);
 
+// Collaborate on a playlist
+router.post('/:id/collaborators/join', ctrl.joinCollaborative);
+
 module.exports = router;
