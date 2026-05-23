@@ -46,7 +46,8 @@ Base paths:
 
 ## User endpoints
 
-- `GET /api/user/playlists` (public only)
+- `GET /api/user/playlists` (public discovery)
+- `GET /api/user/playlists/library` (playlists you created or collaborate on)
 - `GET /api/user/playlists/list` (alias of list)
 - `GET /api/user/playlists/search?q=<query>` (search by playlist name)
 - `GET /api/user/playlists/recommendations?mode=personalized|trending` (playlist recommendations)

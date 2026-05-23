@@ -5,6 +5,7 @@ const ctrl = require('../../controllers/user/playlistsController');
 const uploadCover = require('../../middleware/uploadCover');
 
 router.get('/', ctrl.list);
+router.get('/library', ctrl.library);
 router.get('/list', ctrl.listAlias);
 router.get('/search', ctrl.search);
 router.get('/recommendations', ctrl.recommended);

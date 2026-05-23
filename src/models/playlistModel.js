@@ -18,6 +18,18 @@ function toNum(v, def) {
     return Number.isFinite(n) ? n : def;
 }
 
+function toBool(v, def = false) {
+    if (v === undefined || v === null || v === '') return def;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    if (typeof v === 'string') {
+        const normalized = v.trim().toLowerCase();
+        if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+        if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+    return Boolean(v);
+}
+
 function mapPlaylistArtistFromUser(userRow, fallbackCreatorId = null) {
     if (!userRow && !fallbackCreatorId) return [];
     return [{
@@ -121,8 +133,8 @@ function sanitizeInsert(payload = {}) {
         out.creator_id = payload.creator_id;
     }
 
-    if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
-    if (payload.is_collaborative !== undefined) out.is_collaborative = Boolean(payload.is_collaborative);
+    out.is_public = payload.is_public === undefined ? false : toBool(payload.is_public, false);
+    out.is_collaborative = payload.is_collaborative === undefined ? false : toBool(payload.is_collaborative, false);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : null;
     if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : null;
 
@@ -150,8 +162,8 @@ function sanitizeUpdate(payload = {}) {
         if (payload.creator_id !== null && !isUUID(payload.creator_id)) throw new Error('creator_id must be a UUID or null');
         out.creator_id = payload.creator_id;
     }
-    if (payload.is_public !== undefined) out.is_public = Boolean(payload.is_public);
-    if (payload.is_collaborative !== undefined) out.is_collaborative = Boolean(payload.is_collaborative);
+    if (payload.is_public !== undefined) out.is_public = toBool(payload.is_public, false);
+    if (payload.is_collaborative !== undefined) out.is_collaborative = toBool(payload.is_collaborative, false);
     if (payload.description !== undefined) out.description = typeof payload.description === 'string' ? payload.description.trim() : payload.description;
     if (payload.language_code !== undefined) out.language_code = typeof payload.language_code === 'string' ? payload.language_code.trim() : payload.language_code;
 
@@ -282,6 +294,49 @@ async function listPlaylistsUser({ limit = 20, offset = 0, q } = {}) {
         .order('created_at', { ascending: false })
         .range(start, end);
     if (error) throw error;
+    return { items: (data || []).map(mapPlaylistSummary), total: count || 0 };
+}
+
+async function listLibraryPlaylistsUser({ userId, limit = 20, offset = 0, q } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const end = start + l - 1;
+
+    if (!isUUID(userId)) {
+        return { items: [], total: 0 };
+    }
+
+    const { data: memberships, error: membershipsErr } = await client()
+        .from('playlist_users')
+        .select('playlist_id')
+        .eq('user_id', userId);
+    if (membershipsErr) throw membershipsErr;
+
+    const playlistIds = Array.from(
+        new Set((memberships || []).map((row) => row?.playlist_id).filter((playlistId) => isUUID(playlistId)))
+    );
+
+    if (playlistIds.length === 0) {
+        return { items: [], total: 0 };
+    }
+
+    let qb = client()
+        .from(table)
+        .select(
+            `
+                playlist_id, name, creator_id, cover_url, language_code, duration, total_tracks, likes_count, created_at, updated_at,
+                users:users!playlists_creator_id_fkey(user_id, name, avatar_url)
+            `,
+            { count: 'exact' }
+        )
+        .in('playlist_id', playlistIds)
+        .order('updated_at', { ascending: false });
+
+    if (q) qb = qb.ilike('name', `%${q}%`);
+
+    const { data, error, count } = await qb.range(start, end);
+    if (error) throw error;
+
     return { items: (data || []).map(mapPlaylistSummary), total: count || 0 };
 }
 
@@ -495,6 +550,7 @@ module.exports = {
     deletePlaylist,
     getPlaylistUser,
     listPlaylistsUser,
+    listLibraryPlaylistsUser,
     listTrendingPlaylistsUser,
     listRecommendedPlaylistsUser,
     joinPlaylist,

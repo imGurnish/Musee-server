@@ -6,6 +6,7 @@ const {
     updatePlaylist,
     deletePlaylist,
     listPlaylistsUser,
+    listLibraryPlaylistsUser,
     getPlaylistUser,
     listTrendingPlaylistsUser,
     listRecommendedPlaylistsUser,
@@ -45,6 +46,43 @@ async function list(req, res) {
     const offset = page * limit;
     const { items, total } = await listPlaylistsUser({ limit, offset, q });
     res.json({ items, total, page, limit });
+}
+
+async function library(req, res) {
+    const limit = Math.min(100, Number(req.query.limit) || 20);
+    const page = Math.max(0, Number(req.query.page) || 0);
+    const q = req.query.q || undefined;
+    const offset = page * limit;
+    const { items, total } = await listLibraryPlaylistsUser({
+        userId: req.user?.id,
+        limit,
+        offset,
+        q,
+    });
+
+    const currentUserName =
+        req.user?.user_metadata?.name ||
+        req.user?.user_metadata?.full_name ||
+        req.user?.email ||
+        'You';
+
+    const enrichedItems = (items || []).map((item) => {
+        if ((item.creator_name || (item.artists && item.artists.length > 0)) || item.creator_id !== req.user?.id) {
+            return item;
+        }
+
+        return {
+            ...item,
+            creator_name: currentUserName,
+            artists: [{
+                artist_id: req.user.id,
+                name: currentUserName,
+                avatar_url: req.user?.user_metadata?.avatar_url || null,
+            }],
+        };
+    });
+
+    res.json({ items: enrichedItems, total, page, limit });
 }
 
 async function listAlias(req, res) {
@@ -102,6 +140,21 @@ async function getOne(req, res) {
     }
     
     if (!isAllowed) return res.status(403).json({ error: 'Forbidden' });
+
+    if ((!item.creator_name || !item.artists || item.artists.length === 0) && req.user && item.creator_id === req.user.id) {
+        const displayName =
+            req.user.user_metadata?.name ||
+            req.user.user_metadata?.full_name ||
+            req.user.email ||
+            'You';
+        item.creator_name = displayName;
+        item.artists = [{
+            artist_id: req.user.id,
+            name: displayName,
+            avatar_url: req.user.user_metadata?.avatar_url || null,
+        }];
+    }
+
     res.json(item);
 }
 
@@ -210,6 +263,7 @@ async function joinCollaborative(req, res) {
 
 module.exports = {
     list,
+    library,
     listAlias,
     search,
     recommended,
