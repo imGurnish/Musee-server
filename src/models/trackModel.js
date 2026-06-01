@@ -37,9 +37,16 @@ function mapRowAudios(row) {
     return (row.track_assets || []).map(toSignedAudioFromAsset).filter(Boolean);
 }
 
-function buildHlsPayload(trackId, hlsMasterPath) {
+function resolveHlsMasterPath(trackId, hlsMasterPath) {
     if (!trackId) return null;
-    if (hlsMasterPath === null) return null;
+    const normalized = typeof hlsMasterPath === 'string' ? hlsMasterPath.trim() : '';
+    if (normalized) return normalized;
+    return `hls/track_${trackId}/master.m3u8`;
+}
+
+function buildHlsPayload(trackId, hlsMasterPath) {
+    const masterPath = resolveHlsMasterPath(trackId, hlsMasterPath);
+    if (!masterPath) return null;
     return {
         master: `/api/user/tracks/${trackId}/hls/master.m3u8`,
         master_expires_at: null,
@@ -205,7 +212,7 @@ async function listTracks({ limit = 20, offset = 0, q } = {}) {
         popularity_score: row.popularity_score,
         copyright_text: row.copyright_text,
         label_id: row.label_id,
-        hls_master_path: row.hls_master_path,
+        hls_master_path: resolveHlsMasterPath(row.track_id, row.hls_master_path),
         created_at: row.created_at,
         updated_at: row.updated_at,
         video_url: row.video_url,
@@ -268,7 +275,7 @@ async function getTrack(track_id) {
         popularity_score: data.popularity_score,
         copyright_text: data.copyright_text,
         label_id: data.label_id,
-        hls_master_path: data.hls_master_path,
+        hls_master_path: resolveHlsMasterPath(data.track_id, data.hls_master_path),
         created_at: data.created_at,
         updated_at: data.updated_at,
         video_url: data.video_url,
@@ -519,7 +526,7 @@ async function listTracksByArtist({ artist_id, limit = 20, offset = 0, q } = {})
         popularity_score: row.popularity_score,
         copyright_text: row.copyright_text,
         label_id: row.label_id,
-        hls_master_path: row.hls_master_path,
+        hls_master_path: resolveHlsMasterPath(row.track_id, row.hls_master_path),
         created_at: row.created_at,
         updated_at: row.updated_at,
         video_url: row.video_url,
