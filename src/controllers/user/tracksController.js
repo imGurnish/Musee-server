@@ -6,7 +6,6 @@ const { getAlbum } = require('../../models/albumModel');
 const { addTrackArtist } = require('../../models/trackArtistsModel');
 const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 const { uploadTrackVideoToStorage, deleteTrackVideoFromStorage } = require('../../utils/supabaseStorage');
-const { withAbsoluteHlsUrls, withAbsoluteHlsUrlsList } = require('../../utils/urlUtils');
 const { isUUID } = require('../../utils/validators');
 
 function filterAllowedFields(payload) {
@@ -37,7 +36,7 @@ async function list(req, res) {
     const q = req.query.q || undefined;
     const offset = page * limit;
     const { items, total } = await listTracksUser({ limit, offset, q });
-    res.json({ items: withAbsoluteHlsUrlsList(req, items), total, page, limit });
+    res.json({ items, total, page, limit });
 }
 
 async function getOne(req, res) {
@@ -45,7 +44,7 @@ async function getOne(req, res) {
     if (!isUUID(id)) throw createError(400, 'invalid track id');
     const item = await getTrackUser(id);
     if (!item) throw createError(404, 'Track not found');
-    res.json(withAbsoluteHlsUrls(req, item));
+    res.json(item);
 }
 
 async function create(req, res) {
@@ -116,7 +115,7 @@ async function create(req, res) {
     }
 
     // no audio to process — return created (not published)
-    res.status(201).json(withAbsoluteHlsUrls(req, result));
+    res.status(201).json(result);
 }
 
 async function update(req, res) {
@@ -175,7 +174,7 @@ async function update(req, res) {
         }
     }
 
-    res.json(withAbsoluteHlsUrls(req, result));
+    res.json(result);
 }
 
 async function remove(req, res) {

@@ -2,7 +2,6 @@ const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumMo
 const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
-const { withAbsoluteHlsUrlsList } = require('../../utils/urlUtils');
 const { supabase, supabaseAdmin } = require('../../db/config');
 const db = supabaseAdmin || supabase;
 
@@ -134,7 +133,7 @@ async function madeForYou(req, res) {
 
     // Tag them with type if not already (listTracksUser might not have it)
     const albums = albumsRes.items.map(i => ({ ...i, type: i.type || 'album' }));
-    const tracks = withAbsoluteHlsUrlsList(req, tracksRes.items).map(i => ({ ...i, type: 'track' }));
+    const tracks = tracksRes.items.map(i => ({ ...i, type: 'track' }));
     const playlists = playlistsRes.items.map(i => ({
         ...i,
         id: i.playlist_id,
@@ -219,7 +218,7 @@ async function trending(req, res) {
 
     // items from models already have 'type' set in our new listTrending* functions
     const albums = albumsRes.items;
-    const tracks = withAbsoluteHlsUrlsList(req, tracksRes.items);
+    const tracks = tracksRes.items;
     const playlists = playlistsRes.items.map(i => ({
         ...i,
         id: i.playlist_id,
