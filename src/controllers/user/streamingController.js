@@ -1,6 +1,5 @@
 const { blobServiceClient, containerName } = require('../../db/config');
 const { getBlobSasUrl } = require('../../utils/azureSas');
-const path = require('path');
 
 if (!blobServiceClient) {
     console.warn('[streamingController] Azure Blob Storage not configured');
@@ -31,11 +30,8 @@ async function getHlsMaster(req, res) {
         const lines = text.split(/\r?\n/);
         const out = lines.map((line) => {
             if (!line || line.startsWith('#')) return line;
-            // line like v96/index.m3u8
-            const variantRel = line.replace(/\\/g, '/');
-            const variantBlob = `${basePrefix}/${variantRel}`;
-            const sas = getBlobSasUrl(variantBlob);
-            return sas;
+            // Keep variant links on API route so variant playlist gets rewritten too.
+            return line.replace(/\\/g, '/');
         }).join('\n');
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
         return res.send(out);
