@@ -3,6 +3,7 @@ const { getRedisClient } = require('../../utils/redisClient');
 const { listTracksUser, listTracksByIdsUser } = require('../../models/trackModel');
 const { isUUID } = require('../../utils/validators');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
+const { withAbsoluteHlsUrlsList } = require('../../utils/urlUtils');
 
 const DEFAULT_MIN_QUEUE_SIZE = Math.max(
   1,
@@ -110,7 +111,7 @@ async function getQueue(req, res) {
     };
   });
 
-  return res.json({ items, total: ids.length });
+  return res.json({ items: withAbsoluteHlsUrlsList(req, items), total: ids.length });
 }
 
 // POST /api/user/queue/add  { track_id, metadata? } | { track_ids: [], metadata: []? }
@@ -269,7 +270,7 @@ async function playTrack(req, res) {
     };
   });
 
-  return res.status(201).json({ items: expanded, total: ensured.length });
+  return res.status(201).json({ items: withAbsoluteHlsUrlsList(req, expanded), total: ensured.length });
 }
 
 module.exports = {
