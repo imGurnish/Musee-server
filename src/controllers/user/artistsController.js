@@ -6,6 +6,7 @@ const {
     deleteArtist,
     listArtistsUser,
     getArtistUser,
+    getSimilarArtists,
 } = require('../../models/artistModel');
 const { listTracksByArtistUser } = require('../../models/trackModel');
 const { listAlbumsByArtistUser } = require('../../models/albumModel');
@@ -24,13 +25,14 @@ function filterAllowedFields(payload) {
     return out;
 }
 
-// GET /api/user/artists?limit=&page=&q=
+// GET /api/user/artists?limit=&page=&q=&languages=
 async function list(req, res) {
     const limit = Math.min(100, Number(req.query.limit) || 20);
     const page = Math.max(0, Number(req.query.page) || 0);
     const q = req.query.q || undefined;
+    const languages = req.query.languages || undefined;
     const offset = page * limit;
-    const { items, total } = await listArtistsUser({ limit, offset, q });
+    const { items, total } = await listArtistsUser({ limit, offset, q, languages });
     res.json({ items, total, page, limit });
 }
 
@@ -104,7 +106,16 @@ async function remove(req, res) {
     res.status(204).send();
 }
 
-module.exports = { list, getOne, create, update, remove };
+// GET /api/user/artists/:id/similar
+async function getSimilar(req, res) {
+    const { id } = req.params;
+    if (!isUUID(id)) throw createError(400, 'invalid artist id');
+    const limit = Math.min(100, Number(req.query.limit) || 3);
+    const items = await getSimilarArtists(id, limit);
+    res.json(items);
+}
+
+module.exports = { list, getOne, create, update, remove, getSimilar };
 // GET /api/user/artists/:id/tracks
 async function listTracks(req, res) {
     const { id } = req.params;

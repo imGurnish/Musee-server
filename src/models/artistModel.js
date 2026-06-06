@@ -226,9 +226,38 @@ async function deleteArtists(artist_ids) {
     return count || 0;
 }
 
-async function listArtistsUser({ limit = 20, offset = 0, q } = {}) {
+async function listArtistsUser({ limit = 20, offset = 0, q, languages } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const l = Math.max(1, Math.min(100, Number(limit) || 20));
+
+    if (languages && (Array.isArray(languages) ? languages.length > 0 : String(languages).trim().length > 0)) {
+        const langArray = Array.isArray(languages)
+            ? languages
+            : String(languages).split(',').map(s => s.trim()).filter(Boolean);
+
+        const { data, error } = await client().rpc('get_artists_by_languages', {
+            langs: langArray,
+            search_q: q || null,
+            limit_val: l,
+            offset_val: start
+        });
+        if (error) throw error;
+
+        const total = data.length > 0 ? Number(data[0].out_total_count) : 0;
+        const items = data.map(row => ({
+            artist_id: row.out_artist_id,
+            name: row.out_name,
+            avatar_url: row.out_avatar_url,
+            cover_url: row.out_cover_url,
+            bio: row.out_bio,
+            genres: [],
+            debut_year: row.out_debut_year,
+            is_verified: row.out_is_verified,
+            monthly_listeners: row.out_monthly_listeners,
+        }));
+
+        return { items, total };
+    }
 
     if (q) {
         // Step 1: Use fuzzy trigram RPC to fetch matching artist IDs and total count
@@ -346,4 +375,25 @@ async function getArtistUser(artist_id) {
     };
 }
 
-module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, getArtistsByIds, deleteArtists, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate };
+async function getSimilarArtists(artist_id, limit = 3) {
+    if (!isUUID(artist_id)) throw new Error('Invalid artist id');
+    const { data, error } = await client().rpc('get_similar_artists', {
+        artist_uuid: artist_id,
+        limit_val: limit
+    });
+    if (error) throw error;
+
+    return (data || []).map(row => ({
+        artist_id: row.out_artist_id,
+        name: row.out_name,
+        avatar_url: row.out_avatar_url,
+        cover_url: row.out_cover_url,
+        bio: row.out_bio,
+        genres: [],
+        debut_year: row.out_debut_year,
+        is_verified: row.out_is_verified,
+        monthly_listeners: row.out_monthly_listeners,
+    }));
+}
+
+module.exports = { listArtists, getArtist, createArtist, updateArtist, deleteArtist, getArtistsByIds, deleteArtists, listArtistsUser, getArtistUser, sanitizeArtistInsert, sanitizeArtistUpdate, getSimilarArtists };

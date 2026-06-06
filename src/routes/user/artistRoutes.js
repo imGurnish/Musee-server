@@ -5,6 +5,7 @@ const ctrl = require('../../controllers/user/artistsController');
 const uploadCover = require('../../middleware/uploadCover');
 
 router.get('/', ctrl.list);
+router.get('/:id/similar', ctrl.getSimilar);
 router.get('/:id', ctrl.getOne);
 router.get('/:id/tracks', ctrl.listTracks);
 router.get('/:id/albums', ctrl.listAlbums);
