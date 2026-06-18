@@ -3,6 +3,7 @@ const { getRedisClient } = require('../../utils/redisClient');
 const { listTracksUser, listTracksByIdsUser } = require('../../models/trackModel');
 const { isUUID } = require('../../utils/validators');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
+const { getAutoNextTrackIds } = require('../../models/recommendationModel');
 
 const DEFAULT_MIN_QUEUE_SIZE = Math.max(
   1,
@@ -27,12 +28,47 @@ async function ensureMinQueue(userId, minSize = 10) {
 
   // determine how many to add
   const need = minSize - ids.length;
-  // get total published tracks count
-  const { total } = await listTracksUser({ limit: 1, offset: 0, preferredLanguages });
-  if (!total || total <= 0) return ids;
 
   const seen = new Set(ids);
   const candidates = [];
+
+  // 1. Personalized auto-next: seed from the last queued (UUID) track and the
+  // user's taste profile. This is what makes "next track" actually relevant
+  // instead of random catalog noise.
+  try {
+    const seedTrackId = [...ids].reverse().find(id => isUUID(id)) || null;
+    const personalized = await getAutoNextTrackIds({
+      userId,
+      seedTrackId,
+      limit: need,
+      excludeIds: ids,
+      preferredLanguages,
+    });
+    for (const id of personalized) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        candidates.push(id);
+        if (candidates.length >= need) break;
+      }
+    }
+  } catch (e) {
+    console.warn('[QUEUE] personalized auto-next failed, will use random fill:', e?.message || e);
+  }
+
+  if (candidates.length >= need) {
+    await client.rPush(key, candidates);
+    return client.lRange(key, 0, -1);
+  }
+
+  // 2. Fallback: top up the remainder with random catalog windows so playback
+  // never stalls even with a cold/empty taste profile.
+  // get total published tracks count
+  const { total } = await listTracksUser({ limit: 1, offset: 0, preferredLanguages });
+  if (!total || total <= 0) {
+    if (candidates.length) await client.rPush(key, candidates);
+    return client.lRange(key, 0, -1);
+  }
+
   // fetch in a few random windows until we collect enough unique ids
   const FETCH_LIMIT = Math.min(50, Math.max(need * 2, 20));
   const maxOffset = Math.max(0, total - FETCH_LIMIT);

@@ -1,5 +1,5 @@
 const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumModel');
-const { listTracksUser, listTrendingTracksUser } = require('../../models/trackModel');
+const { listTracksUser, listTrendingTracksUser, listWindowedTrendingTracksUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
 const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
 const { supabase, supabaseAdmin } = require('../../db/config');
@@ -208,7 +208,7 @@ async function trending(req, res) {
     const emptyResult = { items: [], total: 0 };
     const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
         listTrendingAlbumsUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
-        listTrendingTracksUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
+        listWindowedTrendingTracksUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
         listTrendingPlaylistsUser({ limit: fetchLimit, offset: subOffset, preferredLanguages }),
     ]);
 

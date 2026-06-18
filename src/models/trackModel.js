@@ -691,3 +691,50 @@ async function listTrendingTracksUser({ limit = 20, offset = 0, preferredLanguag
 }
 
 module.exports.listTrendingTracksUser = listTrendingTracksUser;
+
+/**
+ * Windowed, recency-weighted trending tracks.
+ *
+ * Uses the get_trending_tracks() RPC (recent plays, completion-weighted, with a
+ * small all-time popularity floor) so the list actually moves over time instead
+ * of being frozen on the static play_count column. Falls back to the legacy
+ * play_count ordering if the RPC is unavailable or returns nothing (e.g. a brand
+ * new install with no recent listening history yet).
+ *
+ * @param {object}   opts
+ * @param {number}   opts.limit
+ * @param {number}   opts.offset
+ * @param {string[]} opts.preferredLanguages
+ * @param {number}   opts.days        trending window (default 7)
+ */
+async function listWindowedTrendingTracksUser({ limit = 20, offset = 0, preferredLanguages, days = 7 } = {}) {
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const start = Math.max(0, Number(offset) || 0);
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
+
+    try {
+        // Over-fetch a bit so we can resolve + keep ordering after publish filter.
+        const { data, error } = await client().rpc('get_trending_tracks', {
+            p_days: days,
+            p_limit: l + start + 20,
+            p_offset: 0,
+            p_languages: languageCodes.length ? languageCodes : null,
+        });
+        if (error) throw error;
+
+        const orderedIds = (data || []).map(r => r.track_id);
+        const pageIds = orderedIds.slice(start, start + l);
+        if (pageIds.length) {
+            const tracks = await listTracksByIdsUser(pageIds);
+            const withType = tracks.map(t => ({ ...t, type: 'track' }));
+            return { items: withType, total: orderedIds.length };
+        }
+        // No recent-play data yet -> fall through to legacy ordering.
+    } catch (e) {
+        console.warn('[TRENDING] get_trending_tracks RPC unavailable, falling back to play_count:', e?.message || e);
+    }
+
+    return listTrendingTracksUser({ limit: l, offset: start, preferredLanguages });
+}
+
+module.exports.listWindowedTrendingTracksUser = listWindowedTrendingTracksUser;

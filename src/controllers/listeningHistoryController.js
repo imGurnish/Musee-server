@@ -140,6 +140,19 @@ exports.logTrackPlay = async (req, res) => {
     // Update artist/album/playlist listening history (aggregate)
     await updateAggregateListeningStats(userId, resolvedTrackId, timeListenedSeconds, listeningContext, contextId);
 
+    // Count this as a real play (not a quick skip) and bump the global play
+    // counter that powers trending. Without this, trending stayed frozen on
+    // import-time values.
+    const isRealPlay = !wasSkipped
+      && (completionPercentage >= 30 || (timeListenedSeconds || 0) >= 30);
+    if (isRealPlay) {
+      const { error: pcErr } = await db.rpc('increment_track_play_count', {
+        p_track_id: resolvedTrackId,
+        p_increment: 1,
+      });
+      if (pcErr) console.error('Error incrementing play_count:', pcErr.message);
+    }
+
     // Invalidate recommendation cache for strong positive or negative signals.
     if (completionPercentage > 70 || wasSkipped || completionPercentage < 50) {
       await invalidateUserRecommendationCache(userId);
@@ -535,11 +548,13 @@ async function getDiscoveryRecommendations(userId, limit) {
     .slice(0, 5)
     .map(a => a.genre);
 
-  // Find tracks in those genres that user hasn't heard
+  // Find tracks in those genres that user hasn't heard.
+  // overlaps() = share ANY of the top genres (contains() would require ALL,
+  // which matched almost nothing and starved discovery).
   const { data: recommendedTracks } = await db
     .from('track_content_features')
     .select('track_id')
-    .contains('genres', topGenres)
+    .overlaps('genres', topGenres)
     .limit(limit * 2); // Get more, will filter
 
   if (!recommendedTracks) return [];
@@ -593,7 +608,7 @@ async function getMoodBasedRecommendations(userId, limit) {
   const { data: tracks } = await db
     .from('track_content_features')
     .select('track_id')
-    .contains('mood', moods)
+    .overlaps('mood', moods)
     .limit(limit);
 
   return tracks?.map(t => t.track_id) || [];
@@ -616,11 +631,19 @@ async function getColdStartRecommendations(userId, limit) {
   const genres = prefs.favorite_genres || [];
   const moods = prefs.favorite_moods || [];
 
-  const { data: tracks } = await db
-    .from('track_content_features')
-    .select('track_id')
-    .or(`genres.contains.${genres},mood.contains.${moods}`)
-    .limit(limit);
+  // Match any onboarding genre OR mood (overlaps = array intersection).
+  let query = db.from('track_content_features').select('track_id');
+  if (genres.length && moods.length) {
+    query = query.or(`genres.ov.{${genres.join(',')}},mood.ov.{${moods.join(',')}}`);
+  } else if (genres.length) {
+    query = query.overlaps('genres', genres);
+  } else if (moods.length) {
+    query = query.overlaps('mood', moods);
+  } else {
+    return [];
+  }
+
+  const { data: tracks } = await query.limit(limit);
 
   return tracks?.map(t => t.track_id) || [];
 }
@@ -675,46 +698,75 @@ async function injectRandomness(userId, trackIds) {
  * 
  * @private
  */
+/**
+ * Core: recompute a user's genre affinity from listening history + preferences.
+ * Reusable by both the admin endpoint and the background scheduler.
+ * @param {string} userId
+ * @returns {Promise<number>} number of genres scored
+ */
+async function recomputeGenreAffinity(userId) {
+  if (!isUuid(userId)) return 0;
+
+  // Get all genres user has listened to (with engagement stats)
+  const { data: listeningData, error: statsErr } = await db
+    .rpc('get_user_genres_with_stats', { user_id_param: userId });
+
+  if (statsErr) {
+    console.error(`[AFFINITY] get_user_genres_with_stats failed for ${userId}:`, statsErr.message);
+    return 0;
+  }
+  if (!listeningData || listeningData.length === 0) return 0;
+
+  // Build the new affinity rows.
+  const rows = listeningData.map((genre) => {
+    const likes = Number(genre.likes) || 0;
+    const dislikes = Number(genre.dislikes) || 0;
+    const avgCompletion = Number(genre.avg_completion_percentage) || 0;
+    const trackCount = Number(genre.track_count) || 0;
+
+    let affinityScore =
+      ((likes - dislikes) / (likes + dislikes + 1)) * 0.6 +
+      ((avgCompletion - 50) / 100) * 0.3 +
+      Math.min(trackCount / 50, 1) * 0.1;
+
+    // Clamp to the column range (-1.0 .. 1.0)
+    affinityScore = Math.max(-1, Math.min(1, affinityScore));
+
+    return {
+      user_id: userId,
+      genre: genre.genre,
+      affinity_score: Number(affinityScore.toFixed(2)),
+      track_count: trackCount,
+      total_listen_time_seconds: Number(genre.total_listen_time_seconds) || 0,
+    };
+  });
+
+  // Replace existing affinity for this user atomically-ish:
+  // delete then upsert in one batch (cheaper than per-row inserts).
+  await db.from('user_genre_affinity').delete().eq('user_id', userId);
+  const { error: upErr } = await db
+    .from('user_genre_affinity')
+    .upsert(rows, { onConflict: 'user_id,genre' });
+  if (upErr) {
+    console.error(`[AFFINITY] upsert failed for ${userId}:`, upErr.message);
+    return 0;
+  }
+
+  // Invalidate cached recommendations so the fresh profile is used.
+  await invalidateUserRecommendationCache(userId);
+
+  return rows.length;
+}
+exports.recomputeGenreAffinity = recomputeGenreAffinity;
+
 exports.calculateGenreAffinity = async (req, res) => {
   try {
     const { userId } = req.params;
-
-    // Clear existing
-    await db
-      .from('user_genre_affinity')
-      .delete()
-      .eq('user_id', userId);
-
-    // Get all genres user has listened to
-    const { data: listeningData } = await db
-      .rpc('get_user_genres_with_stats', { user_id_param: userId });
-
-    if (!listeningData) {
-      return res.json({ success: true, count: 0 });
-    }
-
-    // Calculate affinity for each genre
-    for (const genre of listeningData) {
-      const affinityScore =
-        ((genre.likes - genre.dislikes) / (genre.likes + genre.dislikes + 1)) * 0.6 +
-        ((genre.avg_completion_percentage - 50) / 100) * 0.3 +
-        Math.min(genre.track_count / 50, 1) * 0.1;
-
-      await db
-        .from('user_genre_affinity')
-        .insert({
-          user_id: userId,
-          genre: genre.genre,
-          affinity_score: affinityScore,
-          track_count: genre.track_count,
-          total_listen_time_seconds: genre.total_listen_time_seconds
-        });
-    }
-
+    const count = await recomputeGenreAffinity(userId);
     res.json({
       success: true,
-      message: `Calculated affinity for ${listeningData.length} genres`,
-      count: listeningData.length
+      message: `Calculated affinity for ${count} genres`,
+      count,
     });
   } catch (error) {
     console.error('Error calculating affinity:', error);
@@ -730,8 +782,10 @@ exports.calculateGenreAffinity = async (req, res) => {
  * Cache recommendations
  * @private
  */
+const RECOMMENDATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
 async function cacheRecommendations(userId, type, trackIds, reasons = []) {
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000); // 12 hours
+  const expiresAt = new Date(Date.now() + RECOMMENDATION_CACHE_TTL_MS);
 
   await db
     .from('user_recommendations_cache')

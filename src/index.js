@@ -152,5 +152,13 @@ redisClient
         console.error('Redis client connection error:', err);
     });
 
+// Background recommendation jobs (affinity refresh, similarity graph, cache cleanup).
+try {
+    const { startScheduler } = require('./jobs/scheduler');
+    startScheduler();
+} catch (e) {
+    console.warn('Scheduler not started:', e?.message || e);
+}
+
 module.exports = app;
 
