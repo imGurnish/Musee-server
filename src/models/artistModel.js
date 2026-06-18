@@ -139,7 +139,7 @@ async function listArtists({ limit = 20, offset = 0, q } = {}) {
 
     // Search by user.name OR artists.bio
     if (q) {
-        qb = qb.or(`name.ilike.%${q}%,artists.bio.ilike.%${q}%`);
+        qb = qb.or(`name.ilike.%${q}%,email.ilike.%${q}%`);
     }
 
     const { data, error, count } = await qb.range(start, end);
