@@ -218,44 +218,53 @@ AS $$
 DECLARE
   updated integer;
 BEGIN
-  WITH am AS (
-    SELECT track_id, array_agg(artist_id) AS artist_ids
-    FROM public.track_artists
-    GROUP BY track_id
+  -- Perform an optimized batch update of similar tracks using set-based joins
+  -- instead of slow row-by-row array unnesting / intersection subqueries.
+  WITH track_genres AS (
+    SELECT track_id, unnest(genres) AS genre
+    FROM public.track_content_features
   ),
-  pairs AS (
+  genre_pairs AS (
+    SELECT 
+      tg1.track_id AS tid, 
+      tg2.track_id AS sid, 
+      COUNT(*) AS shared_genre_count
+    FROM track_genres tg1
+    JOIN track_genres tg2 ON tg1.genre = tg2.genre AND tg1.track_id <> tg2.track_id
+    GROUP BY tg1.track_id, tg2.track_id
+  ),
+  artist_pairs AS (
+    SELECT 
+      ta1.track_id AS tid, 
+      ta2.track_id AS sid, 
+      COUNT(*) AS shared_artist_count
+    FROM public.track_artists ta1
+    JOIN public.track_artists ta2 ON ta1.artist_id = ta2.artist_id AND ta1.track_id <> ta2.track_id
+    GROUP BY ta1.track_id, ta2.track_id
+  ),
+  scored_pairs AS (
     SELECT
-      a.track_id AS tid,
-      b.track_id AS sid,
-      cardinality(ARRAY(SELECT unnest(a.genres) INTERSECT SELECT unnest(b.genres))) * 2
-      + cardinality(ARRAY(
-          SELECT unnest(COALESCE(ama.artist_ids, '{}'::uuid[]))
-          INTERSECT
-          SELECT unnest(COALESCE(amb.artist_ids, '{}'::uuid[]))
-        )) * 3 AS score
-    FROM public.track_content_features a
-    JOIN public.track_content_features b
-      ON b.track_id <> a.track_id
-     AND b.genres && a.genres
-    LEFT JOIN am ama ON ama.track_id = a.track_id
-    LEFT JOIN am amb ON amb.track_id = b.track_id
+      gp.tid,
+      gp.sid,
+      (gp.shared_genre_count * 2 + COALESCE(ap.shared_artist_count, 0) * 3) AS score
+    FROM genre_pairs gp
+    LEFT JOIN artist_pairs ap ON gp.tid = ap.tid AND gp.sid = ap.sid
   ),
-  ranked AS (
+  ranked_pairs AS (
     SELECT
       tid,
       sid,
       row_number() OVER (PARTITION BY tid ORDER BY score DESC, sid) AS rn
-    FROM pairs
-    WHERE score > 0
+    FROM scored_pairs
   ),
   agg AS (
     SELECT tid, array_agg(sid ORDER BY rn) AS sims
-    FROM ranked
+    FROM ranked_pairs
     WHERE rn <= p_limit
     GROUP BY tid
   )
   UPDATE public.track_content_features f
-  SET similar_track_ids = agg.sims,
+  SET similar_track_ids = COALESCE(agg.sims, '{}'::uuid[]),
       updated_at = now()
   FROM agg
   WHERE agg.tid = f.track_id;
