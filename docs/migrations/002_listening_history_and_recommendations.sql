@@ -325,7 +325,7 @@ CREATE INDEX idx_mood_affinity_score ON public.user_mood_affinity(user_id, affin
 -- ============================================================================
 
 -- Get top artists for a user (with listening frequency)
-CREATE OR REPLACE VIEW v_user_top_artists AS
+CREATE OR REPLACE VIEW v_user_top_artists WITH (security_invoker = true) AS
 SELECT 
   ual.user_id,
   ual.artist_id,
@@ -337,7 +337,7 @@ SELECT
 FROM public.user_artist_listening_history ual;
 
 -- Get user's liked tracks with content features
-CREATE OR REPLACE VIEW v_user_liked_tracks_with_features AS
+CREATE OR REPLACE VIEW v_user_liked_tracks_with_features WITH (security_invoker = true) AS
 SELECT 
   utp.user_id,
   utp.track_id,
@@ -352,7 +352,7 @@ LEFT JOIN public.track_content_features tcf ON utp.track_id = tcf.track_id
 WHERE utp.preference = 1; -- Only liked tracks
 
 -- Get recently played tracks for a user
-CREATE OR REPLACE VIEW v_user_recent_plays AS
+CREATE OR REPLACE VIEW v_user_recent_plays WITH (security_invoker = true) AS
 SELECT 
   utlh.user_id,
   utlh.track_id,
@@ -364,7 +364,7 @@ SELECT
 FROM public.user_track_listening_history utlh;
 
 -- Get user's genre affinity profile
-CREATE OR REPLACE VIEW v_user_genre_profile AS
+CREATE OR REPLACE VIEW v_user_genre_profile WITH (security_invoker = true) AS
 SELECT 
   user_id,
   array_agg(
