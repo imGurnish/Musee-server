@@ -2,8 +2,11 @@ const { createClient } = require('redis');
 
 let client;
 
+const DEFAULT_REDIS_URL = process.env.DEFAULT_REDIS_URL;
+
 function getRedisUrlFromEnv() {
   if (process.env.REDIS_URL) return process.env.REDIS_URL;
+  if (DEFAULT_REDIS_URL) return DEFAULT_REDIS_URL;
   const host = process.env.REDIS_HOST || '127.0.0.1';
   const port = process.env.REDIS_PORT || '6379';
   const password = process.env.REDIS_PASSWORD ? `:${process.env.REDIS_PASSWORD}@` : '';
