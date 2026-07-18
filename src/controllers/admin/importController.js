@@ -23,7 +23,7 @@ const DEFAULTS = {
 const SAAVN_BASE = 'https://www.jiosaavn.com/api.php';
 const TRACK_IMPORT_CONCURRENCY = Math.max(
   1,
-  Math.min(8, Number.parseInt(process.env.IMPORT_TRACK_CONCURRENCY || '3', 10) || 3)
+  Math.min(100, Number.parseInt(process.env.IMPORT_TRACK_CONCURRENCY || '20', 10) || 20)
 );
 
 const importJobs = new Map();
