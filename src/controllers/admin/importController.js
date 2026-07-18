@@ -1217,64 +1217,93 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
   }
 
   if (jobId) {
-    updateJob(jobId, { progress: Math.max(96, importJobs.get(jobId)?.progress || 96) });
+    updateJob(jobId, { progress: Math.max(90, importJobs.get(jobId)?.progress || 90) });
   }
 
-  importLog('info', 'Starting track asset processing from encrypted media', {
+  // Resolve all candidate URLs (including generating Auth Tokens via JioSaavn API)
+  const candidates = [];
+  const decryptedUrl = decryptSaavnMediaUrl(encryptedMediaUrl);
+  if (decryptedUrl) {
+    for (const url of buildBitrateVariantUrls(decryptedUrl)) {
+      candidates.push(url);
+    }
+  }
+
+  const authUrl = await resolveAuthMediaUrlFromEncrypted(encryptedMediaUrl);
+  if (authUrl) {
+    candidates.push(authUrl);
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(`No media URL candidates resolved for track ${sourceTrackId || trackId}`);
+  }
+
+  importLog('info', 'Resolved media candidates, delegating to Azure Function', {
     trackId: sourceTrackId || trackId,
-    dbTrackId: trackId
+    candidateCount: candidates.length
   });
 
-  const mediaResp = await fetchTrackMediaForIngest({ encryptedMediaUrl });
-  const contentType = mediaResp.headers['content-type'] || 'audio/mp4';
-  const extension = contentType.includes('mpeg')
-    ? 'mp3'
-    : contentType.includes('mp4') || contentType.includes('aac')
-      ? 'm4a'
-      : 'bin';
+  const functionUrl = process.env.AZURE_TRANSCODER_URL;
+  const functionKey = process.env.AZURE_TRANSCODER_CODE;
 
-  const processResult = await processAudioBuffer({
-    originalname: `track_${trackId}.${extension}`,
-    mimetype: contentType,
-    buffer: Buffer.from(mediaResp.data)
-  }, trackId);
+  if (!functionUrl) {
+    throw new Error('Azure Transcoder function URL is not configured (AZURE_TRANSCODER_URL)');
+  }
 
-  importLog('info', 'processAudioBuffer completed', {
+  const urlWithCode = functionKey 
+    ? `${functionUrl}${functionUrl.includes('?') ? '&' : '?'}code=${functionKey}` 
+    : functionUrl;
+
+  if (jobId) {
+    updateJob(jobId, { progress: 93, status: 'transcoding' });
+  }
+
+  let response;
+  try {
+    response = await axios.post(urlWithCode, {
+      trackId,
+      mediaUrls: candidates
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 180000 // 3 minutes timeout for Azure Function to transcode and upload
+    });
+  } catch (axiosErr) {
+    const errorDetails = axiosErr.response?.data?.error || axiosErr.response?.data || axiosErr.message;
+    throw new Error(`Azure Function error: ${errorDetails}`);
+  }
+
+  if (!response.data || !response.data.success) {
+    throw new Error(response.data?.error || 'Azure Function transcoding failed');
+  }
+
+  const { hlsMasterPath, bitrates } = response.data;
+
+  importLog('info', 'Azure Function transcoding completed successfully', {
     trackId: sourceTrackId || trackId,
     dbTrackId: trackId,
-    progressiveCount: Object.keys(processResult.files || {}).length,
-    hasHlsMaster: Boolean(processResult.hls?.master)
+    hlsMasterPath
   });
 
-  if (!processResult.hls?.master) {
-    throw new Error(`HLS master playlist was not generated for track ${sourceTrackId || trackId}`);
+  if (jobId) {
+    updateJob(jobId, { progress: 97 });
   }
 
-  const fileEntries = Object.values(processResult.files || {}).filter(Boolean);
   const assetTx = await executeTransaction(async (tracker) => {
-    for (const filePath of fileEntries) {
-      const fileName = String(filePath).split('/').pop() || '';
-      const bitrateMatch = fileName.match(/_(\d+)k\./);
-      const bitrate = bitrateMatch ? Number.parseInt(bitrateMatch[1], 10) : processResult.bitrate || 128;
-      const ext = (fileName.split('.').pop() || 'mp3').toLowerCase();
-      await addTrackAudio(trackId, ext, bitrate, filePath);
-    }
-
     await updateAndTrack(
       tracker,
       'tracks',
-      { hls_master_path: processResult.hls.master },
+      { hls_master_path: hlsMasterPath },
       'track_id',
       trackId
     );
   }, { operationName: `Track asset ingest ${trackId}` });
 
   if (!assetTx.success) {
-    throw new Error(assetTx.error || 'Track asset ingest transaction failed');
+    throw new Error(assetTx.error || 'Track asset database write transaction failed');
   }
 
   if (jobId) {
-    updateJob(jobId, { progress: Math.max(99, importJobs.get(jobId)?.progress || 99) });
+    updateJob(jobId, { progress: 99 });
   }
 }
 
