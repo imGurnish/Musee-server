@@ -8,6 +8,9 @@ const router = express.Router();
 const importController = require('../../controllers/admin/importController');
 const authAdmin = require('../../middleware/authAdmin');
 
+// Webhook callback from Azure Transcoder (uses HMAC signature verification)
+router.post('/callback', importController.handleTranscodeCallback);
+
 router.use(authAdmin);
 
 // Four core import routes

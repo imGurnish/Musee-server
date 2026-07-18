@@ -691,43 +691,54 @@ function normalizePlaylistPayload(rawData, playlistId) {
   };
 }
 
-function createJob({ type, sourceId, requestedBy }) {
-  const jobId = uuidv4();
-  const now = new Date().toISOString();
-  const job = {
-    jobId,
-    type,
-    sourceId,
-    trackDownload: true,
-    requestedBy: requestedBy || null,
-    status: 'queued',
-    progress: 0,
-    createdAt: now,
-    startedAt: null,
-    finishedAt: null,
-    result: null,
-    error: null,
-    logs: []
-  };
+async function createJob({ type, sourceId, requestedBy }) {
+  const { data, error } = await supabaseAdmin
+    .from('import_jobs')
+    .insert({
+      type,
+      source_id: sourceId,
+      requested_by: requestedBy || null,
+      status: 'queued',
+      progress: 0
+    })
+    .select('*')
+    .single();
 
-  importJobs.set(jobId, job);
-  importLog('info', 'Created import job', { jobId, type, sourceId, trackDownload: true, requestedBy: requestedBy || null });
-  return job;
+  if (error) throw error;
+  
+  importLog('info', 'Created import job in DB', { jobId: data.job_id, type, sourceId });
+  return {
+    jobId: data.job_id,
+    type: data.type,
+    sourceId: data.source_id,
+    requestedBy: data.requested_by,
+    status: data.status,
+    progress: data.progress,
+    createdAt: data.created_at
+  };
 }
 
-function updateJob(jobId, patch) {
-  const job = importJobs.get(jobId);
-  if (!job) return;
-  Object.assign(job, patch);
-  importLog('info', 'Updated import job', { jobId, patch });
+async function updateJob(jobId, patch) {
+  const dbPatch = {};
+  if (patch.status !== undefined) dbPatch.status = patch.status;
+  if (patch.progress !== undefined) dbPatch.progress = patch.progress;
+  if (patch.error !== undefined) dbPatch.error = patch.error;
+  if (patch.finishedAt !== undefined) dbPatch.finished_at = patch.finishedAt;
+
+  const { error } = await supabaseAdmin
+    .from('import_jobs')
+    .update(dbPatch)
+    .eq('job_id', jobId);
+
+  if (error) {
+    importLog('error', 'Failed to update job in DB', { jobId, error: error.message });
+  } else {
+    importLog('info', 'Updated import job in DB', { jobId, patch });
+  }
 }
 
 function jobLog(jobId, message) {
-  const job = importJobs.get(jobId);
-  if (!job) return;
-  job.logs.push({ at: new Date().toISOString(), message });
-  if (job.logs.length > 100) job.logs = job.logs.slice(-100);
-  importLog('info', 'Job log event', { jobId, message });
+  importLog('info', `Job log [${jobId}]: ${message}`);
 }
 
 async function uploadImageFromUrlIfPossible({ bucket, path, imageUrl }) {
@@ -1211,36 +1222,33 @@ async function trackHasIngestedAudio(trackId) {
   return hasHls;
 }
 
-async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackId, jobId }) {
+async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackId, jobId, jobTrackId }) {
   if (!encryptedMediaUrl) {
     throw new Error(`Missing encrypted media URL for track ${sourceTrackId || trackId}`);
   }
 
-  if (jobId) {
-    updateJob(jobId, { progress: Math.max(90, importJobs.get(jobId)?.progress || 90) });
+  if (jobTrackId) {
+    await supabaseAdmin
+      .from('import_job_tracks')
+      .update({ status: 'downloading', updated_at: new Date().toISOString() })
+      .eq('id', jobTrackId);
   }
 
-  // Resolve all candidate URLs (including generating Auth Tokens via JioSaavn API)
-  const candidates = [];
-  const decryptedUrl = decryptSaavnMediaUrl(encryptedMediaUrl);
-  if (decryptedUrl) {
-    for (const url of buildBitrateVariantUrls(decryptedUrl)) {
-      candidates.push(url);
-    }
-  }
-
-  const authUrl = await resolveAuthMediaUrlFromEncrypted(encryptedMediaUrl);
-  if (authUrl) {
-    candidates.push(authUrl);
-  }
-
-  if (candidates.length === 0) {
-    throw new Error(`No media URL candidates resolved for track ${sourceTrackId || trackId}`);
-  }
-
-  importLog('info', 'Resolved media candidates, delegating to Azure Function', {
+  importLog('info', 'Downloading track audio on main server', {
     trackId: sourceTrackId || trackId,
-    candidateCount: candidates.length
+    dbTrackId: trackId
+  });
+
+  // Download the track audio locally to server buffer using the working IP/APIs
+  const mediaResp = await fetchTrackMediaForIngest({ encryptedMediaUrl });
+  if (!mediaResp || !mediaResp.data) {
+    throw new Error(`Failed to download audio content on server for track ${sourceTrackId || trackId}`);
+  }
+
+  const audioBase64 = Buffer.from(mediaResp.data).toString('base64');
+  importLog('info', 'Audio downloaded, uploading to Azure Function for transcoding', {
+    trackId: sourceTrackId || trackId,
+    sizeBytes: mediaResp.data.length
   });
 
   const functionUrl = process.env.AZURE_TRANSCODER_URL;
@@ -1254,17 +1262,22 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
     ? `${functionUrl}${functionUrl.includes('?') ? '&' : '?'}code=${functionKey}` 
     : functionUrl;
 
-  if (jobId) {
-    updateJob(jobId, { progress: 93, status: 'transcoding' });
+  if (jobTrackId) {
+    await supabaseAdmin
+      .from('import_job_tracks')
+      .update({ status: 'transcoding', updated_at: new Date().toISOString() })
+      .eq('id', jobTrackId);
   }
 
   let response;
   try {
     response = await axios.post(urlWithCode, {
       trackId,
-      mediaUrls: candidates
+      audioBase64
     }, {
       headers: { 'Content-Type': 'application/json' },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
       timeout: 180000 // 3 minutes timeout for Azure Function to transcode and upload
     });
   } catch (axiosErr) {
@@ -1276,7 +1289,7 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
     throw new Error(response.data?.error || 'Azure Function transcoding failed');
   }
 
-  const { hlsMasterPath, bitrates } = response.data;
+  const { hlsMasterPath } = response.data;
 
   importLog('info', 'Azure Function transcoding completed successfully', {
     trackId: sourceTrackId || trackId,
@@ -1284,15 +1297,11 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
     hlsMasterPath
   });
 
-  if (jobId) {
-    updateJob(jobId, { progress: 97 });
-  }
-
   const assetTx = await executeTransaction(async (tracker) => {
     await updateAndTrack(
       tracker,
       'tracks',
-      { hls_master_path: hlsMasterPath },
+      { hls_master_path: hlsMasterPath, is_published: true },
       'track_id',
       trackId
     );
@@ -1302,8 +1311,11 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
     throw new Error(assetTx.error || 'Track asset database write transaction failed');
   }
 
-  if (jobId) {
-    updateJob(jobId, { progress: 99 });
+  if (jobTrackId) {
+    await supabaseAdmin
+      .from('import_job_tracks')
+      .update({ status: 'completed', updated_at: new Date().toISOString() })
+      .eq('id', jobTrackId);
   }
 }
 
@@ -1334,6 +1346,33 @@ async function importTrackById(trackId, options = {}) {
     );
   }
 
+  // --- JOB TRACK RESOLUTION ---
+  let jobTrackId = options.jobTrackId;
+  if (!jobTrackId && options.jobId) {
+    const { data: existingJobTrack } = await supabaseAdmin
+      .from('import_job_tracks')
+      .select('id')
+      .eq('job_id', options.jobId)
+      .eq('track_external_id', trackId)
+      .maybeSingle();
+
+    if (existingJobTrack) {
+      jobTrackId = existingJobTrack.id;
+    } else {
+      const { data: newJobTrack } = await supabaseAdmin
+        .from('import_job_tracks')
+        .insert({
+          job_id: options.jobId,
+          track_external_id: trackId,
+          title: safeText(normalized.title || normalized.song || 'Unknown Track'),
+          status: 'queued'
+        })
+        .select('id')
+        .single();
+      jobTrackId = newJobTrack?.id;
+    }
+  }
+
   const shouldExpandAlbum = !options.skipFullAlbumExpansion && Boolean(normalized.albumId);
   if (shouldExpandAlbum) {
     const completedAlbumImports = getCompletedAlbumImportSet(options);
@@ -1358,6 +1397,17 @@ async function importTrackById(trackId, options = {}) {
 
     if (!importedTrackId) {
       throw new Error(`Track ${trackId} was not found after full album import ${normalized.albumId}`);
+    }
+
+    // Since the album was expanded, we should update our job track status if it exists
+    if (jobTrackId) {
+      const alreadyIngested = await trackHasIngestedAudio(importedTrackId);
+      if (alreadyIngested) {
+        await supabaseAdmin
+          .from('import_job_tracks')
+          .update({ status: 'completed', updated_at: new Date().toISOString() })
+          .eq('id', jobTrackId);
+      }
     }
 
     return {
@@ -1428,8 +1478,14 @@ async function importTrackById(trackId, options = {}) {
         trackId: existingTrackId,
         encryptedMediaUrl: normalized.downloadUrl,
         sourceTrackId: trackId,
-        jobId: options.jobId
+        jobId: options.jobId,
+        jobTrackId
       });
+    } else if (jobTrackId) {
+      await supabaseAdmin
+        .from('import_job_tracks')
+        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('id', jobTrackId);
     }
 
     return {
@@ -1563,7 +1619,8 @@ async function importTrackById(trackId, options = {}) {
     trackId: tx.data.trackId,
     encryptedMediaUrl: tx.data.encryptedMediaUrl,
     sourceTrackId: trackId,
-    jobId: options.jobId
+    jobId: options.jobId,
+    jobTrackId
   });
 
   return { trackId: tx.data.trackId, created: true, downloaded: true };
@@ -1577,6 +1634,29 @@ async function importAlbumById(albumId, options = {}) {
   const normalized = normalizeAlbumPayload(remoteAlbum, albumId);
   const uniqueTrackIds = Array.from(new Set(normalized.trackIds));
   let completedTracks = 0;
+
+  // Pre-populate track status records in DB for the job (deduplicating already existing ones)
+  if (options.jobId) {
+    const { data: existing } = await supabaseAdmin
+      .from('import_job_tracks')
+      .select('track_external_id')
+      .eq('job_id', options.jobId);
+    
+    const existingSet = new Set((existing || []).map(t => t.track_external_id));
+
+    const trackInserts = (normalized.songs || [])
+      .filter(song => !existingSet.has(String(song.id).trim()))
+      .map(song => ({
+        job_id: options.jobId,
+        track_external_id: String(song.id).trim(),
+        title: safeText(song.title || song.song, 'Unknown Track'),
+        status: 'queued'
+      }));
+
+    if (trackInserts.length > 0) {
+      await supabaseAdmin.from('import_job_tracks').insert(trackInserts);
+    }
+  }
 
   importLog('info', 'Importing album tracks with bounded concurrency', {
     albumId,
@@ -1595,16 +1675,39 @@ async function importAlbumById(albumId, options = {}) {
         total: uniqueTrackIds.length
       });
 
-      const imported = await importTrackById(tid, {
-        ...options,
-        forcedAlbumId: albumShell.albumId,
-        skipFullAlbumExpansion: true
-      });
+      let jobTrackId;
+      if (options.jobId) {
+        const { data: jobTrack } = await supabaseAdmin
+          .from('import_job_tracks')
+          .select('id')
+          .eq('job_id', options.jobId)
+          .eq('track_external_id', tid)
+          .maybeSingle();
+        jobTrackId = jobTrack?.id;
+      }
+
+      let imported = null;
+      try {
+        imported = await importTrackById(tid, {
+          ...options,
+          forcedAlbumId: albumShell.albumId,
+          skipFullAlbumExpansion: true,
+          jobTrackId
+        });
+      } catch (err) {
+        importLog('error', `Track import failed for tid ${tid}`, { error: err.message });
+        if (jobTrackId) {
+          await supabaseAdmin
+            .from('import_job_tracks')
+            .update({ status: 'failed', error: err.message, updated_at: new Date().toISOString() })
+            .eq('id', jobTrackId);
+        }
+      }
 
       completedTracks += 1;
       if (options.jobId) {
-        updateJob(options.jobId, {
-          progress: Math.min(95, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 95))
+        await updateJob(options.jobId, {
+          progress: Math.min(89, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 89))
         });
       }
 
@@ -1686,6 +1789,29 @@ async function importPlaylistById(playlistId, options = {}) {
   const uniqueTrackIds = Array.from(new Set(normalized.trackIds));
   let completedTracks = 0;
 
+  // Pre-populate track status records in DB for the job (deduplicating already existing ones)
+  if (options.jobId) {
+    const { data: existing } = await supabaseAdmin
+      .from('import_job_tracks')
+      .select('track_external_id')
+      .eq('job_id', options.jobId);
+    
+    const existingSet = new Set((existing || []).map(t => t.track_external_id));
+
+    const trackInserts = (normalized.songs || [])
+      .filter(song => !existingSet.has(String(song.id).trim()))
+      .map(song => ({
+        job_id: options.jobId,
+        track_external_id: String(song.id).trim(),
+        title: safeText(song.title || song.song, 'Unknown Track'),
+        status: 'queued'
+      }));
+
+    if (trackInserts.length > 0) {
+      await supabaseAdmin.from('import_job_tracks').insert(trackInserts);
+    }
+  }
+
   importLog('info', 'Importing playlist tracks with bounded concurrency', {
     playlistId,
     totalTracks: uniqueTrackIds.length,
@@ -1703,24 +1829,48 @@ async function importPlaylistById(playlistId, options = {}) {
         total: uniqueTrackIds.length
       });
 
-      const trackResult = await importTrackById(tid, options);
+      let jobTrackId;
+      if (options.jobId) {
+        const { data: jobTrack } = await supabaseAdmin
+          .from('import_job_tracks')
+          .select('id')
+          .eq('job_id', options.jobId)
+          .eq('track_external_id', tid)
+          .maybeSingle();
+        jobTrackId = jobTrack?.id;
+      }
 
-      const linkTx = await executeTransaction(async () => {
-        const result = await supabaseAdmin
-          .from('playlist_tracks')
-          .insert({ playlist_id: playlistDbId, track_id: trackResult.trackId, position: index + 1 });
+      try {
+        const trackResult = await importTrackById(tid, {
+          ...options,
+          jobTrackId
+        });
 
-        if (result.error && result.error.code !== '23505') {
-          throw result.error;
+        const linkTx = await executeTransaction(async () => {
+          const result = await supabaseAdmin
+            .from('playlist_tracks')
+            .insert({ playlist_id: playlistDbId, track_id: trackResult.trackId, position: index + 1 });
+
+          if (result.error && result.error.code !== '23505') {
+            throw result.error;
+          }
+        }, { operationName: `Link track ${trackResult.trackId} to playlist ${playlistDbId}` });
+
+        if (!linkTx.success) throw new Error(linkTx.error || 'Failed to link playlist track');
+      } catch (err) {
+        importLog('error', `Track import failed for tid ${tid} in playlist ${playlistDbId}`, { error: err.message });
+        if (jobTrackId) {
+          await supabaseAdmin
+            .from('import_job_tracks')
+            .update({ status: 'failed', error: err.message, updated_at: new Date().toISOString() })
+            .eq('id', jobTrackId);
         }
-      }, { operationName: `Link track ${trackResult.trackId} to playlist ${playlistDbId}` });
-
-      if (!linkTx.success) throw new Error(linkTx.error || 'Failed to link playlist track');
+      }
 
       completedTracks += 1;
       if (options.jobId) {
-        updateJob(options.jobId, {
-          progress: Math.min(95, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 95))
+        await updateJob(options.jobId, {
+          progress: Math.min(89, Math.round((completedTracks / Math.max(uniqueTrackIds.length, 1)) * 89))
         });
       }
 
@@ -1745,10 +1895,9 @@ async function importArtistById(artistId, options = {}) {
 }
 
 async function runImportJob(job) {
-  importLog('info', 'runImportJob invoked', { jobId: job.jobId, type: job.type, sourceId: job.sourceId, trackDownload: job.trackDownload });
-  updateJob(job.jobId, {
-    status: 'running',
-    startedAt: new Date().toISOString(),
+  importLog('info', 'runImportJob invoked', { jobId: job.jobId, type: job.type, sourceId: job.sourceId });
+  await updateJob(job.jobId, {
+    status: 'processing',
     progress: 1
   });
 
@@ -1782,16 +1931,28 @@ async function runImportJob(job) {
       throw new Error(`Unsupported import type: ${job.type}`);
     }
 
-    updateJob(job.jobId, {
-      status: 'success',
-      progress: 100,
-      finishedAt: new Date().toISOString(),
-      result
-    });
-    jobLog(job.jobId, `Completed ${job.type} import`);
-    importLog('info', 'Job completed successfully', { jobId: job.jobId, type: job.type });
+    if (job.type === 'artist') {
+      await updateJob(job.jobId, {
+        status: 'completed',
+        progress: 100,
+        finishedAt: new Date().toISOString()
+      });
+      jobLog(job.jobId, `Completed ${job.type} import`);
+    } else {
+      // For album/playlist/track, triggering phase is done. Callback webhook will mark it 'completed'/'failed'.
+      await updateJob(job.jobId, {
+        status: 'processing',
+        progress: 90
+      });
+      jobLog(job.jobId, `Finished triggering parallel audio transcodes. Processing HLS in background.`);
+      
+      // If all tracks are already completed (e.g., skipped because they already have ingested audio), finalize immediately.
+      await checkAndUpdateParentJobStatus(job.jobId);
+    }
+
+    importLog('info', 'Job processing trigger phase completed successfully', { jobId: job.jobId, type: job.type });
   } catch (error) {
-    updateJob(job.jobId, {
+    await updateJob(job.jobId, {
       status: 'failed',
       finishedAt: new Date().toISOString(),
       error: error.message,
@@ -1802,36 +1963,41 @@ async function runImportJob(job) {
   }
 }
 
-function enqueueImport(req, res, type, sourceId) {
+const isUUIDVal = (val) => typeof val === 'string' && /^[0-9a-fA-F-]{36}$/.test(val);
+
+async function enqueueImport(req, res, type, sourceId) {
   if (!sourceId || String(sourceId).trim().length === 0) {
     return res.status(400).json({ error: `${type} id is required` });
   }
 
-  const job = createJob({
-    type,
-    sourceId: String(sourceId).trim(),
-    requestedBy: req.user?.id || null
-  });
+  try {
+    const job = await createJob({
+      type,
+      sourceId: String(sourceId).trim(),
+      requestedBy: req.user?.id || null
+    });
 
-  setImmediate(() => runImportJob(job));
+    setImmediate(() => runImportJob(job));
 
-  importLog('info', 'Queued import request from API', {
-    routeType: type,
-    sourceId: String(sourceId).trim(),
-    trackDownload: true,
-    requestedBy: req.user?.id || null,
-    jobId: job.jobId
-  });
+    importLog('info', 'Queued import request from API', {
+      routeType: type,
+      sourceId: String(sourceId).trim(),
+      requestedBy: req.user?.id || null,
+      jobId: job.jobId
+    });
 
-  return res.status(202).json({
-    success: true,
-    message: 'Import job queued',
-    jobId: job.jobId,
-    type: job.type,
-    sourceId: job.sourceId,
-    trackDownload: true,
-    status: job.status
-  });
+    return res.status(202).json({
+      success: true,
+      message: 'Import job queued',
+      jobId: job.jobId,
+      type: job.type,
+      sourceId: job.sourceId,
+      status: job.status
+    });
+  } catch (err) {
+    importLog('error', 'Failed to enqueue import', { type, sourceId, error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
 }
 
 async function importArtist(req, res) {
@@ -1893,22 +2059,152 @@ async function enqueueImportByApi(req, res) {
 
 async function getImportStatus(req, res) {
   const { jobId } = req.params;
-  const job = importJobs.get(jobId);
 
-  if (!job) {
-    importLog('warn', 'Status requested for unknown job', { jobId });
-    return res.status(200).json({
-      jobId,
-      status: 'not_found',
-      progress: 100,
-      error: 'job not found in in-memory queue (possibly process restart)',
-      result: null,
-      logs: []
-    });
+  if (!isUUIDVal(jobId)) {
+    return res.status(400).json({ error: 'Invalid jobId format' });
   }
 
-  importLog('info', 'Status requested for job', { jobId, status: job.status, progress: job.progress });
-  return res.status(200).json(job);
+  try {
+    const { data: job, error } = await supabaseAdmin
+      .from('import_jobs')
+      .select(`
+        *,
+        tracks:import_job_tracks(*)
+      `)
+      .eq('job_id', jobId)
+      .maybeSingle();
+
+    if (error) {
+      importLog('error', 'Status request failed', { jobId, error: error.message });
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (!job) {
+      importLog('warn', 'Status requested for unknown job', { jobId });
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const formatted = {
+      jobId: job.job_id,
+      type: job.type,
+      sourceId: job.source_id,
+      requestedBy: job.requested_by,
+      status: job.status,
+      progress: job.progress,
+      createdAt: job.created_at,
+      finishedAt: job.finished_at,
+      error: job.error,
+      tracks: (job.tracks || []).map(t => ({
+        id: t.id,
+        trackExternalId: t.track_external_id,
+        title: t.title,
+        status: t.status,
+        error: t.error,
+        updatedAt: t.updated_at
+      }))
+    };
+
+    importLog('info', 'Status requested for job', { jobId, status: job.status, progress: job.progress });
+    return res.status(200).json(formatted);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function checkAndUpdateParentJobStatus(jobId) {
+  const { data: tracks, error } = await supabaseAdmin
+    .from('import_job_tracks')
+    .select('status')
+    .eq('job_id', jobId);
+
+  if (error || !tracks || tracks.length === 0) return;
+
+  const total = tracks.length;
+  const finished = tracks.filter(t => t.status === 'completed' || t.status === 'failed').length;
+  const progress = Math.min(100, Math.max(90, Math.round((finished / total) * 10) + 90));
+
+  const isCompleted = finished === total;
+  const anyFailed = tracks.some(t => t.status === 'failed');
+
+  let finalStatus = 'processing';
+  if (isCompleted) {
+    finalStatus = anyFailed ? 'failed' : 'completed';
+  }
+
+  await supabaseAdmin
+    .from('import_jobs')
+    .update({
+      progress: isCompleted ? 100 : progress,
+      status: finalStatus,
+      finished_at: isCompleted ? new Date().toISOString() : null
+    })
+    .eq('job_id', jobId);
+}
+
+async function handleTranscodeCallback(req, res) {
+  const signature = req.headers['x-callback-signature'];
+  const payload = req.body;
+  const { status, trackId, jobId, jobTrackId, hlsMasterPath, bitrates, error } = payload;
+
+  const secret = process.env.AZURE_TRANSCODER_SECRET || '';
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(JSON.stringify(payload))
+    .digest('hex');
+
+  if (signature !== expectedSignature) {
+    importLog('warn', 'Callback verification failed', { received: signature, expected: expectedSignature });
+    return res.status(401).json({ error: 'Invalid HMAC signature' });
+  }
+
+  importLog('info', 'Received signed Azure callback', { trackId, jobId, jobTrackId, status });
+
+  try {
+    if (status === 'success') {
+      // 1. Database transactions to save HLS path
+      const assetTx = await executeTransaction(async (tracker) => {
+        // HLS playlists are stored relative, so no addTrackAudio progressive paths are needed for HLS variants.
+        // We update the tracks table directly.
+        await updateAndTrack(
+          tracker,
+          'tracks',
+          { hls_master_path: hlsMasterPath, is_published: true },
+          'track_id',
+          trackId
+        );
+      }, { operationName: `Callback ingest ${trackId}` });
+
+      if (!assetTx.success) {
+        throw new Error(assetTx.error || 'Failed to update track table');
+      }
+
+      // 2. Update child track status in database (Supabase realtime will broadcast this)
+      if (jobTrackId) {
+        await supabaseAdmin
+          .from('import_job_tracks')
+          .update({ status: 'completed', updated_at: new Date().toISOString() })
+          .eq('id', jobTrackId);
+      }
+    } else {
+      // Transcode failed
+      if (jobTrackId) {
+        await supabaseAdmin
+          .from('import_job_tracks')
+          .update({ status: 'failed', error: error || 'Unknown transcoding error', updated_at: new Date().toISOString() })
+          .eq('id', jobTrackId);
+      }
+    }
+
+    // 3. Update parent job progress/status
+    if (jobId) {
+      await checkAndUpdateParentJobStatus(jobId);
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    importLog('error', 'Callback execution failed', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
 }
 
 module.exports = {
@@ -1917,5 +2213,6 @@ module.exports = {
   importTrack,
   importPlaylist,
   enqueueImportByApi,
-  getImportStatus
+  getImportStatus,
+  handleTranscodeCallback
 };

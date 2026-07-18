@@ -160,5 +160,51 @@ try {
     console.warn('Scheduler not started:', e?.message || e);
 }
 
+// Database reconciliation: auto-fail any orphaned queued/processing import jobs upon server boot.
+async function reconcileImportJobs() {
+    try {
+        const { supabaseAdmin } = require('./db/config');
+        if (supabaseAdmin) {
+            const { data: activeJobs, error: fetchError } = await supabaseAdmin
+                .from('import_jobs')
+                .select('job_id')
+                .in('status', ['queued', 'processing']);
+            
+            if (fetchError) {
+                console.error('[Startup] Failed to fetch active import jobs for reconciliation:', fetchError.message);
+                return;
+            }
+
+            if (activeJobs && activeJobs.length > 0) {
+                const jobIds = activeJobs.map(j => j.job_id);
+                console.log(`[Startup] Found ${jobIds.length} orphaned import jobs. Marking them as failed.`);
+                
+                await supabaseAdmin
+                    .from('import_jobs')
+                    .update({
+                        status: 'failed',
+                        error: 'Server restarted during import execution.',
+                        finished_at: new Date().toISOString(),
+                        progress: 100
+                    })
+                    .in('job_id', jobIds);
+
+                await supabaseAdmin
+                    .from('import_job_tracks')
+                    .update({
+                        status: 'failed',
+                        error: 'Server restarted during import execution.',
+                        updated_at: new Date().toISOString()
+                    })
+                    .in('job_id', jobIds)
+                    .in('status', ['queued', 'transcoding', 'downloading']);
+            }
+        }
+    } catch (err) {
+        console.error('[Startup] Error during import jobs reconciliation:', err.message);
+    }
+}
+reconcileImportJobs();
+
 module.exports = app;
 

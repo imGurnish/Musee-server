@@ -27,7 +27,7 @@ app.http('transcodeJioSaavn', {
             };
         }
 
-        const { trackId, encryptedMediaUrl, resolvedUrl, mediaUrls } = body;
+        const { trackId, encryptedMediaUrl, resolvedUrl, mediaUrls, audioBase64, callbackUrl, callbackSecret } = body;
 
         if (!trackId) {
             return {
@@ -36,35 +36,118 @@ app.http('transcodeJioSaavn', {
             };
         }
 
-        if (!encryptedMediaUrl && !resolvedUrl && (!mediaUrls || mediaUrls.length === 0)) {
+        if (!audioBase64 && !encryptedMediaUrl && !resolvedUrl && (!mediaUrls || mediaUrls.length === 0)) {
             return {
                 status: 400,
-                jsonBody: { success: false, error: 'Missing encryptedMediaUrl, resolvedUrl or mediaUrls' }
+                jsonBody: { success: false, error: 'Missing audioBase64, encryptedMediaUrl, resolvedUrl or mediaUrls' }
             };
         }
 
-        const containerName = process.env.AZURE_STORAGE_CONTAINER || 'media';
-        const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-        if (!connectionString) {
-            console.error('[Transcoder] Missing AZURE_STORAGE_CONNECTION_STRING environment variable.');
+        const isAsync = Boolean(callbackUrl);
+
+        if (isAsync) {
+            context.log(`[Transcoder] Enqueuing async transcode job for track ${trackId}`);
+            
+            // Fire-and-forget: execute in the background and catch errors
+            executeTranscodeAsync(body, context).catch(err => {
+                console.error(`[Transcoder] Critical background failure:`, err.message);
+            });
+
+            return {
+                status: 202,
+                jsonBody: { success: true, message: 'Transcoding job accepted' }
+            };
+        }
+
+        // Otherwise, run synchronously (developer / debug mode)
+        context.log(`[Transcoder] Running synchronous transcode for track ${trackId}`);
+        try {
+            const result = await runTranscodePipeline(body, context);
+            return {
+                status: 200,
+                jsonBody: { success: true, ...result }
+            };
+        } catch (err) {
+            console.error(`[Transcoder] Ingestion failed for track ${trackId}:`, err);
             return {
                 status: 500,
-                jsonBody: { success: false, error: 'Azure storage connection string not configured on function server' }
+                jsonBody: { success: false, error: err.message }
             };
         }
+    }
+});
 
-        const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
-        const containerClient = blobServiceClient.getContainerClient(containerName);
+async function executeTranscodeAsync(body, context) {
+    const { trackId, jobId, jobTrackId, callbackUrl, callbackSecret } = body;
+    try {
+        const result = await runTranscodePipeline(body, context);
+        await sendCallback(callbackUrl, callbackSecret, {
+            status: 'success',
+            trackId,
+            jobId,
+            jobTrackId,
+            hlsMasterPath: result.hlsMasterPath,
+            bitrates: result.bitrates,
+            fileBitrate: result.fileBitrate
+        }, context);
+    } catch (err) {
+        context.log.error(`[Transcoder] Failed background transcode for track ${trackId}: ${err.message}`);
+        await sendCallback(callbackUrl, callbackSecret, {
+            status: 'failed',
+            trackId,
+            jobId,
+            jobTrackId,
+            error: err.message
+        }, context);
+    }
+}
 
-        // Derive temp directory for processing
-        const tmpDir = path.join(os.tmpdir(), `transcode_${trackId}_${Date.now()}`);
-        fs.mkdirSync(tmpDir, { recursive: true });
+async function sendCallback(url, secret, payload, context) {
+    try {
+        const signature = crypto
+            .createHmac('sha256', secret)
+            .update(JSON.stringify(payload))
+            .digest('hex');
 
-        const infile = path.join(tmpDir, `input_${trackId}.media`);
-        const hlsRootDir = path.join(tmpDir, 'hls');
+        await axios.post(url, payload, {
+            headers: {
+                'Content-Type': 'application/json',
+                'x-callback-signature': signature
+            },
+            timeout: 15000
+        });
+        context.log(`[Transcoder] Callback successfully sent to ${url}`);
+    } catch (err) {
+        console.error(`[Transcoder] Failed to send callback to ${url}:`, err.message);
+    }
+}
 
-        try {
-            // 1. Resolve media source url list
+async function runTranscodePipeline(body, context) {
+    const { trackId, encryptedMediaUrl, resolvedUrl, mediaUrls, audioBase64 } = body;
+    const containerName = process.env.AZURE_STORAGE_CONTAINER || 'media';
+    const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
+    if (!connectionString) {
+        throw new Error('Azure storage connection string not configured on function server');
+    }
+
+    const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+    const containerClient = blobServiceClient.getContainerClient(containerName);
+
+    // Derive temp directory for processing
+    const tmpDir = path.join(os.tmpdir(), `transcode_${trackId}_${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const infile = path.join(tmpDir, `input_${trackId}.media`);
+    const hlsRootDir = path.join(tmpDir, 'hls');
+
+    try {
+        if (audioBase64) {
+            context.log(`[Transcoder] Processing direct audio buffer for track ${trackId}`);
+            const audioBuffer = Buffer.from(audioBase64, 'base64');
+            fs.writeFileSync(infile, audioBuffer);
+            context.log(`[Transcoder] Buffer written to local file.`);
+        } else {
+            // Resolve media source url list
             const urlsToTry = [];
             if (Array.isArray(mediaUrls) && mediaUrls.length > 0) {
                 urlsToTry.push(...mediaUrls);
@@ -82,7 +165,7 @@ app.http('transcodeJioSaavn', {
                 throw new Error('No valid download URLs resolved.');
             }
 
-            // 2. Download from first working URL candidate
+            // Download from first working URL candidate
             let downloadResp = null;
             let lastError = null;
             let finalDownloadUrl = '';
@@ -120,75 +203,66 @@ app.http('transcodeJioSaavn', {
                 writer.on('error', reject);
             });
 
-            context.log(`[Transcoder] Download completed. Probing file.`);
-
-            // Probe the downloaded file to verify its bitrate
-            let fileBitrate = 128;
-            try {
-                const metadata = await new Promise((resolve, reject) => {
-                    ffmpeg.ffprobe(infile, (err, meta) => err ? reject(err) : resolve(meta));
-                });
-                if (metadata?.format?.bit_rate) {
-                    fileBitrate = Math.round(Number(metadata.format.bit_rate) / 1000);
-                }
-                context.log(`[Transcoder] Probed file bitrate: ${fileBitrate}kbps`);
-            } catch (probeErr) {
-                console.warn(`[Transcoder] Probing failed, defaulting to 128kbps:`, probeErr.message);
-            }
-
-            // 3. Generate HLS Variants
-            fs.mkdirSync(hlsRootDir, { recursive: true });
-            const HLS_VARIANTS = [96, 160, 320];
-
-            context.log(`[Transcoder] Transcoding HLS variants: ${HLS_VARIANTS.join(',')}`);
-            await Promise.all(HLS_VARIANTS.map(kb => generateHlsVariant(infile, hlsRootDir, kb)));
-
-            // 4. Generate master playlist content
-            const masterPath = path.join(hlsRootDir, 'master.m3u8');
-            const entries = HLS_VARIANTS.map(kb => [
-                `#EXT-X-STREAM-INF:BANDWIDTH=${kb * 1000 * 2},CODECS="mp4a.40.2"`,
-                `v${kb}/index.m3u8`,
-            ]).flat();
-            const masterContent = [
-                '#EXTM3U',
-                '#EXT-X-VERSION:3',
-                '#EXT-X-INDEPENDENT-SEGMENTS',
-                ...entries,
-                ''
-            ].join('\n');
-            fs.writeFileSync(masterPath, masterContent, 'utf8');
-
-            // 5. Upload files recursively to Azure Blob Storage
-            context.log(`[Transcoder] Uploading transcoded assets to Azure Blob Storage container: ${containerName}`);
-            const hlsPrefix = `hls/track_${trackId}`;
-            await uploadDirToAzureBlob(containerClient, hlsRootDir, hlsPrefix);
-
-            context.log(`[Transcoder] All files uploaded successfully.`);
-
-            return {
-                status: 200,
-                jsonBody: {
-                    success: true,
-                    trackId,
-                    hlsMasterPath: `${hlsPrefix}/master.m3u8`,
-                    bitrates: HLS_VARIANTS,
-                    fileBitrate
-                }
-            };
-        } catch (error) {
-            console.error(`[Transcoder] Ingestion failed for track ${trackId}:`, error);
-            return {
-                status: 500,
-                jsonBody: { success: false, error: error.message }
-            };
-        } finally {
-            // Cleanup temp files
-            try {
-                fs.rmSync(tmpDir, { recursive: true, force: true });
-            } catch (_) {}
+            context.log(`[Transcoder] Download completed.`);
         }
+
+        context.log(`[Transcoder] Probing media file.`);
+
+        // Probe the downloaded file to verify its bitrate
+        let fileBitrate = 128;
+        try {
+            const metadata = await new Promise((resolve, reject) => {
+                ffmpeg.ffprobe(infile, (err, meta) => err ? reject(err) : resolve(meta));
+            });
+            if (metadata?.format?.bit_rate) {
+                fileBitrate = Math.round(Number(metadata.format.bit_rate) / 1000);
+            }
+            context.log(`[Transcoder] Probed file bitrate: ${fileBitrate}kbps`);
+        } catch (probeErr) {
+            console.warn(`[Transcoder] Probing failed, defaulting to 128kbps:`, probeErr.message);
+        }
+
+        // Generate HLS Variants
+        fs.mkdirSync(hlsRootDir, { recursive: true });
+        const HLS_VARIANTS = [96, 160, 320];
+
+        context.log(`[Transcoder] Transcoding HLS variants: ${HLS_VARIANTS.join(',')}`);
+        await Promise.all(HLS_VARIANTS.map(kb => generateHlsVariant(infile, hlsRootDir, kb)));
+
+        // Generate master playlist content
+        const masterPath = path.join(hlsRootDir, 'master.m3u8');
+        const entries = HLS_VARIANTS.map(kb => [
+            `#EXT-X-STREAM-INF:BANDWIDTH=${kb * 1000 * 2},CODECS="mp4a.40.2"`,
+            `v${kb}/index.m3u8`,
+        ]).flat();
+        const masterContent = [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            '#EXT-X-INDEPENDENT-SEGMENTS',
+            ...entries,
+            ''
+        ].join('\n');
+        fs.writeFileSync(masterPath, masterContent, 'utf8');
+
+        // Upload files recursively to Azure Blob Storage
+        context.log(`[Transcoder] Uploading transcoded assets to Azure Blob Storage container: ${containerName}`);
+        const hlsPrefix = `hls/track_${trackId}`;
+        await uploadDirToAzureBlob(containerClient, hlsRootDir, hlsPrefix);
+
+        context.log(`[Transcoder] All files uploaded successfully.`);
+
+        return {
+            hlsMasterPath: `${hlsPrefix}/master.m3u8`,
+            bitrates: HLS_VARIANTS,
+            fileBitrate
+        };
+    } finally {
+        // Cleanup temp files
+        try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch (_) {}
     }
-});
+}
 
 // Helper: Decrypt DES encrypted JioSaavn URLs
 function decryptSaavnMediaUrl(encryptedMediaUrl) {
