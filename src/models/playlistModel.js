@@ -44,6 +44,7 @@ function mapTrackArtists(trackArtists = []) {
         artist_id: ta?.artists?.artist_id || null,
         name: ta?.artists?.users?.name || 'Unknown Artist',
         avatar_url: ta?.artists?.users?.avatar_url || null,
+        role: ta?.role || null,
     })).filter((a) => !!a.artist_id || !!a.name);
 }
 
@@ -205,6 +206,7 @@ async function getPlaylist(playlist_id) {
                     track_id, title, duration, is_explicit, created_at,
                     albums:albums!tracks_album_id_fkey(cover_url),
                     track_artists:track_artists!track_artists_track_id_fkey(
+                        role,
                         artists:artists!track_artists_artist_id_fkey(
                             artist_id,
                             users:users!artists_artist_id_fkey(name, avatar_url)
@@ -358,6 +360,7 @@ async function getPlaylistUser(playlist_id) {
                     track_id, title, duration, is_explicit, created_at,
                     albums:albums!tracks_album_id_fkey(cover_url),
                     track_artists:track_artists!track_artists_track_id_fkey(
+                        role,
                         artists:artists!track_artists_artist_id_fkey(
                             artist_id,
                             users:users!artists_artist_id_fkey(name, avatar_url)

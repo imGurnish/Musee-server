@@ -349,6 +349,7 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages, s
                 track_id, title, duration, created_at, album_id,
                 albums:albums!tracks_album_id_fkey(title, cover_url),
                 track_artists:track_artists!track_artists_track_id_fkey(
+                    role,
                     artists:artists!track_artists_artist_id_fkey(
                         artist_id,
                         users:users!artists_artist_id_fkey(name, avatar_url)
@@ -379,6 +380,7 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages, s
             hls: skipHls ? null : buildHlsPayload(row.track_id),
             artists: (row.track_artists || []).map(ta => ({
                 artist_id: ta?.artists?.artist_id || null,
+                role: ta?.role || null,
                 name: ta?.artists?.users?.name || null,
                 avatar_url: ta?.artists?.users?.avatar_url || null,
             })),
@@ -396,6 +398,7 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages, s
             track_id, title, duration, created_at, album_id,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
+                role,
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
@@ -425,6 +428,7 @@ async function listTracksUser({ limit = 20, offset = 0, q, preferredLanguages, s
         hls: skipHls ? null : buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
@@ -440,6 +444,7 @@ async function getTrackUser(track_id) {
             track_id, title, album_id, duration, play_count, is_explicit, likes_count, created_at,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
+                role,
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
@@ -474,6 +479,7 @@ async function getTrackUser(track_id) {
         hls: buildHlsPayload(data.track_id),
         artists: (data.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
@@ -614,6 +620,7 @@ async function listTracksByIdsUser(trackIds = []) {
             track_id, title, duration, created_at, album_id,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
+                role,
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
@@ -635,6 +642,7 @@ async function listTracksByIdsUser(trackIds = []) {
         hls: buildHlsPayload(row.track_id),
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         }))
@@ -657,6 +665,7 @@ async function listTrendingTracksUser({ limit = 20, offset = 0, preferredLanguag
             track_id, title, duration, created_at, album_id, play_count,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
+                role,
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
@@ -683,6 +692,7 @@ async function listTrendingTracksUser({ limit = 20, offset = 0, preferredLanguag
         },
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
@@ -761,6 +771,7 @@ async function listUndiscoveredTracksUser({ userId, limit = 20, offset = 0, pref
             track_id, title, duration, created_at, album_id, play_count,
             albums:albums!tracks_album_id_fkey(title, cover_url),
             track_artists:track_artists!track_artists_track_id_fkey(
+                role,
                 artists:artists!track_artists_artist_id_fkey(
                     artist_id,
                     users:users!artists_artist_id_fkey(name, avatar_url)
@@ -809,6 +820,7 @@ async function listUndiscoveredTracksUser({ userId, limit = 20, offset = 0, pref
         },
         artists: (row.track_artists || []).map(ta => ({
             artist_id: ta?.artists?.artist_id || null,
+            role: ta?.role || null,
             name: ta?.artists?.users?.name || null,
             avatar_url: ta?.artists?.users?.avatar_url || null,
         })),
