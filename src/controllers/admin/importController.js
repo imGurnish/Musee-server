@@ -7,11 +7,11 @@ const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../../utils/logger');
-const { supabaseAdmin } = require('../../db/config');
+const { supabaseAdmin, blobServiceClient, containerName } = require('../../db/config');
 const { executeTransaction, createAndTrack, updateAndTrack } = require('../../utils/transaction');
 const { getProviderId, findEntityIdByExternalId, upsertExternalRef } = require('../../utils/externalRefs');
 const { processAudioBuffer } = require('../../utils/processAudio');
-const { addTrackAudio } = require('../../models/trackAudiosModel');
+const { addTrackAudio, deleteAudiosForTrack } = require('../../models/trackAudiosModel');
 
 const DEFAULTS = {
   artistAvatar: 'https://xvpputhovrhgowfkjhfv.supabase.co/storage/v1/object/public/avatars/users/default_avatar.png',
@@ -2238,6 +2238,229 @@ async function proxyJioSaavn(req, res) {
   }
 }
 
+function toBlobPath(pathOrUrl) {
+  if (!pathOrUrl || typeof pathOrUrl !== 'string') return null;
+  const trimmed = pathOrUrl.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const marker = `/${containerName}/`;
+      const idx = parsed.pathname.indexOf(marker);
+      if (idx >= 0) {
+        return decodeURIComponent(parsed.pathname.substring(idx + marker.length));
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+  return trimmed.replace(/^\/+/, '');
+}
+
+async function getBrokenTracks(req, res) {
+  try {
+    if (!blobServiceClient) {
+      return res.status(500).json({ error: 'Azure Blob Storage not configured on this server.' });
+    }
+
+    importLog('info', 'getBrokenTracks: Scanning Azure for HLS files...');
+    const container = blobServiceClient.getContainerClient(containerName);
+
+    // 1. Get all HLS master playlists in Azure
+    const existingMasterPlaylists = new Set();
+    for await (const blob of container.listBlobsFlat({ prefix: 'hls/' })) {
+      if (blob.name.endsWith('/master.m3u8')) {
+        existingMasterPlaylists.add(blob.name);
+      }
+    }
+
+    importLog('info', `getBrokenTracks: Found ${existingMasterPlaylists.size} master playlists in Azure.`);
+
+    // 2. Get the provider ID for JioSaavn
+    const providerId = await getProviderId('jiosaavn');
+
+    // 3. Query all tracks imported from JioSaavn (paginated to bypass Supabase 1000 row limits)
+    let tracks = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: pageTracks, error } = await supabaseAdmin
+        .from('tracks')
+        .select(`
+          track_id,
+          title,
+          hls_master_path,
+          is_published,
+          album_id,
+          albums (
+            title
+          ),
+          track_external_refs!inner (
+            external_id,
+            encrypted_media_url
+          )
+        `)
+        .eq('track_external_refs.provider_id', providerId)
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+
+      if (error) {
+        throw error;
+      }
+
+      if (pageTracks && pageTracks.length > 0) {
+        tracks = tracks.concat(pageTracks);
+      }
+
+      if (!pageTracks || pageTracks.length < pageSize) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+
+    // 4. Filter for broken tracks
+    const brokenTracks = [];
+    for (const track of tracks) {
+      const extRef = track.track_external_refs?.[0];
+      const externalId = extRef?.external_id;
+
+      let isBroken = false;
+      let reason = '';
+
+      if (!track.hls_master_path) {
+        isBroken = true;
+        reason = 'missing_master_path';
+      } else {
+        const relativePath = toBlobPath(track.hls_master_path);
+        if (!existingMasterPlaylists.has(relativePath)) {
+          isBroken = true;
+          reason = 'missing_blobs';
+        }
+      }
+
+      if (isBroken) {
+        brokenTracks.push({
+          trackId: track.track_id,
+          title: track.title,
+          albumId: track.album_id,
+          albumTitle: track.albums?.title || 'Unknown Album',
+          hlsMasterPath: track.hls_master_path,
+          externalId,
+          reason
+        });
+      }
+    }
+
+    importLog('info', `getBrokenTracks: Detected ${brokenTracks.length} broken tracks out of ${tracks?.length || 0} total JioSaavn tracks.`);
+    return res.status(200).json({
+      success: true,
+      totalJioSaavnTracks: tracks?.length || 0,
+      brokenCount: brokenTracks.length,
+      tracks: brokenTracks
+    });
+  } catch (err) {
+    importLog('error', 'Failed to get broken tracks', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function rerunBrokenTracks(req, res) {
+  const { trackIds } = req.body;
+
+  if (!Array.isArray(trackIds) || trackIds.length === 0) {
+    return res.status(400).json({ error: 'Array of trackIds is required' });
+  }
+
+  try {
+    const providerId = await getProviderId('jiosaavn');
+
+    // 1. Fetch external_ids and other details for these tracks
+    const { data: tracks, error } = await supabaseAdmin
+      .from('tracks')
+      .select(`
+        track_id,
+        title,
+        track_external_refs!inner (
+          external_id
+        )
+      `)
+      .in('track_id', trackIds)
+      .eq('track_external_refs.provider_id', providerId);
+
+    if (error) throw error;
+    if (!tracks || tracks.length === 0) {
+      return res.status(404).json({ error: 'No matching JioSaavn tracks found to rerun' });
+    }
+
+    importLog('info', `rerunBrokenTracks: Preparing rerun for ${tracks.length} tracks.`);
+
+    const queuedJobs = [];
+
+    for (const track of tracks) {
+      const externalId = track.track_external_refs?.[0]?.external_id;
+      if (!externalId) continue;
+
+      // 2. Perform cleanup of old assets for this track
+      importLog('info', `rerunBrokenTracks: Cleaning up old assets for track ${track.track_id}`);
+
+      // Delete from track_assets table
+      await deleteAudiosForTrack(track.track_id);
+
+      // Clear hls_master_path in tracks table and set is_published to false temporarily
+      await supabaseAdmin
+        .from('tracks')
+        .update({
+          hls_master_path: null,
+          is_published: false,
+          updated_at: new Date().toISOString()
+        })
+        .eq('track_id', track.track_id);
+
+      // Delete HLS folder in Azure storage
+      if (blobServiceClient) {
+        try {
+          const containerClient = blobServiceClient.getContainerClient(containerName);
+          const prefix = `hls/track_${track.track_id}/`;
+          for await (const item of containerClient.listBlobsFlat({ prefix })) {
+            const blockBlobClient = containerClient.getBlockBlobClient(item.name);
+            await blockBlobClient.deleteIfExists();
+          }
+        } catch (azureErr) {
+          importLog('warn', `rerunBrokenTracks: Azure cleanup failed for track ${track.track_id}`, { error: azureErr.message });
+        }
+      }
+
+      // 3. Queue the import job
+      const job = await createJob({
+        type: 'track',
+        sourceId: externalId,
+        requestedBy: req.user?.id || null
+      });
+
+      // Start the job in background
+      setImmediate(() => runImportJob(job));
+
+      queuedJobs.push({
+        trackId: track.track_id,
+        title: track.title,
+        externalId,
+        jobId: job.jobId
+      });
+    }
+
+    return res.status(202).json({
+      success: true,
+      message: `Successfully queued ${queuedJobs.length} tracks for rerun`,
+      jobs: queuedJobs
+    });
+  } catch (err) {
+    importLog('error', 'Failed to rerun broken tracks', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 module.exports = {
   importArtist,
   importAlbum,
@@ -2246,5 +2469,7 @@ module.exports = {
   enqueueImportByApi,
   getImportStatus,
   handleTranscodeCallback,
-  proxyJioSaavn
+  proxyJioSaavn,
+  getBrokenTracks,
+  rerunBrokenTracks
 };

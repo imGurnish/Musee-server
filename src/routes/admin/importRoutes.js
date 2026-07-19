@@ -23,6 +23,10 @@ router.post('/playlist/:playlistId', importController.importPlaylist);
 router.post('/queue', importController.enqueueImportByApi);
 router.get('/status/:jobId', importController.getImportStatus);
 
+// Broken imports diagnostics & repairs
+router.get('/broken', importController.getBrokenTracks);
+router.post('/rerun-broken', importController.rerunBrokenTracks);
+
 // JioSaavn external API proxy
 router.get('/proxy', importController.proxyJioSaavn);
 
