@@ -2207,6 +2207,37 @@ async function handleTranscodeCallback(req, res) {
   }
 }
 
+async function proxyJioSaavn(req, res) {
+  try {
+    const params = req.query;
+    const url = 'https://www.jiosaavn.com/api.php';
+    const response = await axios.get(url, {
+      params,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json,text/plain,*/*',
+        'Origin': 'https://www.jiosaavn.com',
+        'Referer': 'https://www.jiosaavn.com/',
+        'Cookie': 'L=english',
+      }
+    });
+
+    let data = response.data;
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch (_) {
+        // Keep original string
+      }
+    }
+
+    return res.status(200).json(data);
+  } catch (err) {
+    importLog('error', 'Proxy request failed', { error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 module.exports = {
   importArtist,
   importAlbum,
@@ -2214,5 +2245,6 @@ module.exports = {
   importPlaylist,
   enqueueImportByApi,
   getImportStatus,
-  handleTranscodeCallback
+  handleTranscodeCallback,
+  proxyJioSaavn
 };

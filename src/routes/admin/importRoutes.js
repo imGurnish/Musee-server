@@ -23,4 +23,7 @@ router.post('/playlist/:playlistId', importController.importPlaylist);
 router.post('/queue', importController.enqueueImportByApi);
 router.get('/status/:jobId', importController.getImportStatus);
 
+// JioSaavn external API proxy
+router.get('/proxy', importController.proxyJioSaavn);
+
 module.exports = router;
