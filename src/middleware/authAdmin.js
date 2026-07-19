@@ -4,13 +4,18 @@ const { supabaseAdmin, supabase } = require('../db/config');
 // Uses the Supabase v2 auth API: auth.getUser(token)
 // Falls back to the public client if a service-role client isn't configured.
 module.exports = async function authAdmin(req, res, next) {
+    let token = '';
     const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-    if (!authHeader) return res.status(401).json({ error: 'No authorization header' });
+    if (authHeader) {
+        const parts = authHeader.split(' ');
+        token = parts.length === 2 ? parts[1] : parts[0];
+    } else if (req.query.token) {
+        token = req.query.token;
+    }
 
-    // Accept either "Bearer <token>" or raw token
-    const parts = authHeader.split(' ');
-    const token = parts.length === 2 ? parts[1] : parts[0];
-    if (!token) return res.status(401).json({ error: 'Invalid token format' });
+    if (!token) {
+        return res.status(401).json({ error: 'No authorization token provided' });
+    }
 
     const client = supabaseAdmin || supabase;
     if (!client) {
