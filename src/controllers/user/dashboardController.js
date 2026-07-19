@@ -1,7 +1,8 @@
 const { listAlbumsUser, listTrendingAlbumsUser } = require('../../models/albumModel');
-const { listTracksUser, listTrendingTracksUser, listWindowedTrendingTracksUser } = require('../../models/trackModel');
+const { listTracksUser, listTrendingTracksUser, listWindowedTrendingTracksUser, listUndiscoveredTracksUser, listTracksByIdsUser } = require('../../models/trackModel');
 const { listRecommendedPlaylistsUser, listTrendingPlaylistsUser } = require('../../models/playlistModel');
-const { getUserOnboardingPreferences } = require('../../utils/userPreferences');
+const { getUserOnboardingPreferences, normalizeLanguageCodes } = require('../../utils/userPreferences');
+const { getAffinityGenreTrackIds } = require('../../models/recommendationModel');
 const { supabase, supabaseAdmin } = require('../../db/config');
 const db = supabaseAdmin || supabase;
 
@@ -100,25 +101,181 @@ async function boostByRecentContext(userId, items) {
     }
 }
 
+async function getSuggestedTracksForUser(userId, limit, preferredLanguages, prefs, offset = 0) {
+    if (offset > 0) {
+        const { items } = await listTracksUser({ limit, offset, preferredLanguages });
+        return items.map(i => ({ ...i, type: 'track' }));
+    }
+
+    try {
+        const acceptList = [];
+        const seenIds = new Set();
+
+        // 1. Get genre affinity tracks if available
+        if (userId) {
+            const affinityIds = await getAffinityGenreTrackIds(userId, limit * 2, preferredLanguages);
+            if (affinityIds && affinityIds.length > 0) {
+                const items = await listTracksByIdsUser(affinityIds.slice(0, limit));
+                items.forEach(t => {
+                    if (t && t.track_id && !seenIds.has(t.track_id)) {
+                        seenIds.add(t.track_id);
+                        acceptList.push({ ...t, type: 'track' });
+                    }
+                });
+            }
+        }
+
+        // 2. Get tracks matching onboarding favorite genres if we need more
+        if (acceptList.length < limit && prefs) {
+            const favGenres = prefs.favorite_genres || [];
+            if (favGenres.length > 0) {
+                const langs = normalizeLanguageCodes(preferredLanguages);
+                let q = db
+                    .from('track_content_features')
+                    .select('track_id, popularity_score, tracks!inner(language_code, is_published)')
+                    .overlaps('genres', favGenres)
+                    .eq('tracks.is_published', true)
+                    .limit(limit * 2);
+                
+                if (langs.length === 1) q = q.eq('tracks.language_code', langs[0]);
+                else if (langs.length > 1) q = q.in('tracks.language_code', langs);
+
+                const { data: featureRows } = await q;
+                if (featureRows && featureRows.length > 0) {
+                    const matchIds = featureRows.map(r => r.track_id);
+                    const items = await listTracksByIdsUser(matchIds);
+                    items.forEach(t => {
+                        if (t && t.track_id && !seenIds.has(t.track_id)) {
+                            seenIds.add(t.track_id);
+                            acceptList.push({ ...t, type: 'track' });
+                        }
+                    });
+                }
+            }
+        }
+
+        // 3. Fallback to listTracksUser (shuffled)
+        if (acceptList.length < limit) {
+            const remaining = limit - acceptList.length;
+            const { items } = await listTracksUser({ limit: remaining * 4, preferredLanguages });
+            const shuffled = shuffle([...items]);
+            shuffled.forEach(t => {
+                if (t && t.track_id && !seenIds.has(t.track_id) && acceptList.length < limit) {
+                    seenIds.add(t.track_id);
+                    acceptList.push({ ...t, type: 'track' });
+                }
+            });
+        }
+
+        return shuffle(acceptList).slice(0, limit);
+    } catch (e) {
+        console.error('Error in getSuggestedTracksForUser:', e);
+        const { items } = await listTracksUser({ limit, preferredLanguages });
+        return items.map(t => ({ ...t, type: 'track' }));
+    }
+}
+
+async function getSuggestedAlbumsForUser(userId, limit, preferredLanguages, prefs, offset = 0) {
+    if (offset > 0) {
+        const { items } = await listAlbumsUser({ limit, offset, preferredLanguages });
+        return items.map(i => ({ ...i, id: i.album_id, type: 'album' }));
+    }
+
+    try {
+        const acceptList = [];
+        const seenIds = new Set();
+
+        // 1. Onboarding genres
+        if (prefs) {
+            const favGenres = prefs.favorite_genres || [];
+            if (favGenres.length > 0) {
+                const { data: genreAlbums } = await db
+                    .from('album_genres')
+                    .select('album_id, genres!inner(slug, name)')
+                    .in('genres.name', favGenres)
+                    .limit(limit * 2);
+                
+                if (genreAlbums && genreAlbums.length > 0) {
+                    const matchIds = Array.from(new Set(genreAlbums.map(r => r.album_id)));
+                    const { data: detailedAlbums } = await db
+                        .from('albums')
+                        .select(`
+                            album_id, title, cover_url, total_tracks, duration, created_at,
+                            album_artists:album_artists!album_artists_album_id_fkey(
+                                role,
+                                artists:artists!album_artists_artist_id_fkey(
+                                    artist_id,
+                                    users:users!artists_artist_id_fkey(name, avatar_url)
+                                )
+                            )
+                        `)
+                        .in('album_id', matchIds)
+                        .eq('is_published', true)
+                        .gt('total_tracks', 1);
+
+                    if (detailedAlbums) {
+                        detailedAlbums.forEach(row => {
+                            if (row && row.album_id && !seenIds.has(row.album_id)) {
+                                seenIds.add(row.album_id);
+                                acceptList.push({
+                                    album_id: row.album_id,
+                                    id: row.album_id,
+                                    title: row.title,
+                                    cover_url: row.cover_url,
+                                    total_tracks: row.total_tracks,
+                                    duration: row.duration,
+                                    created_at: row.created_at,
+                                    artists: (row.album_artists || []).map(aa => ({
+                                        artist_id: aa?.artists?.artist_id || null,
+                                        name: aa?.artists?.users?.name || null,
+                                        avatar_url: aa?.artists?.users?.avatar_url || null,
+                                    })),
+                                    type: 'album'
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch default albums with a larger range, shuffle and fill
+        const remaining = limit - acceptList.length;
+        if (remaining > 0) {
+            const { items } = await listAlbumsUser({ limit: limit * 4, preferredLanguages });
+            const shuffled = shuffle([...items]);
+            shuffled.forEach(item => {
+                if (item && item.album_id && !seenIds.has(item.album_id) && acceptList.length < limit) {
+                    seenIds.add(item.album_id);
+                    acceptList.push({
+                        ...item,
+                        id: item.album_id,
+                        type: 'album'
+                    });
+                }
+            });
+        }
+
+        return shuffle(acceptList).slice(0, limit);
+    } catch (e) {
+        console.error('Error in getSuggestedAlbumsForUser:', e);
+        const { items } = await listAlbumsUser({ limit, preferredLanguages });
+        return items.map(i => ({ ...i, id: i.album_id, type: 'album' }));
+    }
+}
+
 async function madeForYou(req, res) {
-    // "Made For You" - Currently serving as "New Releases" / Discovery
-    // Fetch recent albums and recent tracks
     const { limit, page, offset } = parsePagination(req.query);
 
-    // Split limit to get a mix
-    const perTypeLimit = Math.ceil(limit / 3) + 2; // fetch a bit more per type
+    const perTypeLimit = Math.ceil(limit / 3) + 2;
     const prefs = await getUserOnboardingPreferences(req.user?.id);
     const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
-
-    // We pass same offset/limit to both for pagination consistency, 
-    // although mixing pagination across two tables is tricky. 
-    // For simplicity, we just fetch top N new items from both based on page.
 
     const subOffset = Math.floor(offset / 3);
     const emptyResult = { items: [], total: 0 };
     const [albumsSettled, tracksSettled, playlistsSettled] = await Promise.allSettled([
-        listAlbumsUser({ limit: perTypeLimit, offset: subOffset, preferredLanguages }),
-        listTracksUser({ limit: perTypeLimit, offset: subOffset, preferredLanguages }),
+        getSuggestedAlbumsForUser(req.user?.id, perTypeLimit, preferredLanguages, prefs, subOffset),
+        getSuggestedTracksForUser(req.user?.id, perTypeLimit, preferredLanguages, prefs, subOffset),
         listRecommendedPlaylistsUser({
             userId: req.user?.id,
             limit: perTypeLimit,
@@ -127,22 +284,19 @@ async function madeForYou(req, res) {
         }),
     ]);
 
-    const albumsRes = albumsSettled.status === 'fulfilled' ? albumsSettled.value : emptyResult;
-    const tracksRes = tracksSettled.status === 'fulfilled' ? tracksSettled.value : emptyResult;
+    const albumsRes = albumsSettled.status === 'fulfilled' ? albumsSettled.value : [];
+    const tracksRes = tracksSettled.status === 'fulfilled' ? tracksSettled.value : [];
     const playlistsRes = playlistsSettled.status === 'fulfilled' ? playlistsSettled.value : emptyResult;
 
-    // Tag them with type if not already (listTracksUser might not have it)
-    const albums = albumsRes.items.map(i => ({ ...i, type: i.type || 'album' }));
-    const tracks = tracksRes.items.map(i => ({ ...i, type: 'track' }));
-    const playlists = playlistsRes.items.map(i => ({
+    const albums = albumsRes.map(i => ({ ...i, type: i.type || 'album' }));
+    const tracks = tracksRes.map(i => ({ ...i, type: 'track' }));
+    const playlists = (playlistsRes.items || playlistsRes).map(i => ({
         ...i,
         id: i.playlist_id,
         type: 'playlist',
         title: i.name,
     }));
 
-    // Interleave or Shuffle
-    // Since it's "Received freshly", let's interleave to ensure variety
     let combined = [];
     const len = Math.max(albums.length, tracks.length, playlists.length);
     for (let i = 0; i < len; i++) {
@@ -151,11 +305,8 @@ async function madeForYou(req, res) {
         if (i < playlists.length) combined.push(playlists[i]);
     }
 
-    // Helper to get image URL for generic item
-    // Tracks use album.cover_url, Albums use cover_url
     combined = combined.map(item => {
         if (item.type === 'track') {
-            // Ensure top-level cover_url exists for frontend convenience if it's missing (it's in item.album.cover_url)
             if (!item.cover_url && item.album) {
                 item.cover_url = item.album.cover_url;
             }
@@ -163,14 +314,9 @@ async function madeForYou(req, res) {
         return item;
     });
 
-    // Slice to limit
     const items = combined.slice(0, limit);
-
-    // Boost by recent listening context for better relevance
     const contextBoostedItems = await boostByRecentContext(req.user?.id, items);
-
-    // Total is estimate
-    const total = (albumsRes.total || 0) + (tracksRes.total || 0) + (playlistsRes.total || 0);
+    const total = (albumsRes.length || 0) + (tracksRes.length || 0) + (playlistsRes.total || playlistsRes.length || 0);
 
     res.json({ items: contextBoostedItems, total, page, limit });
 }
@@ -180,11 +326,11 @@ async function albumsForYou(req, res) {
     const prefs = await getUserOnboardingPreferences(req.user?.id);
     const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
 
-    const { items, total } = await listAlbumsUser({ limit, offset, preferredLanguages });
+    const items = await getSuggestedAlbumsForUser(req.user?.id, limit, preferredLanguages, prefs, offset);
 
     res.json({
         items: items.map(item => ({ ...item, type: item.type || 'album' })),
-        total,
+        total: items.length < limit && offset === 0 ? items.length : 100,
         page,
         limit,
     });
@@ -246,4 +392,20 @@ async function trending(req, res) {
     res.json({ items, total, page, limit });
 }
 
-module.exports = { madeForYou, albumsForYou, trending };
+async function undiscoveredGems(req, res) {
+    const { limit, page, offset } = parsePagination(req.query);
+    const prefs = await getUserOnboardingPreferences(req.user?.id);
+    const preferredLanguages = prefs?.preferred_languages || (prefs?.preferred_language ? [prefs.preferred_language] : []);
+
+    const { items, total } = await listUndiscoveredTracksUser({ userId: req.user?.id, limit, offset, preferredLanguages });
+
+    // Ensure track covers are accessible at top level
+    items.forEach(t => {
+        if (!t.cover_url && t.album) t.cover_url = t.album.cover_url;
+    });
+
+    res.json({ items, total, page, limit });
+}
+
+module.exports = { madeForYou, albumsForYou, trending, undiscoveredGems };
+

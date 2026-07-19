@@ -738,3 +738,84 @@ async function listWindowedTrendingTracksUser({ limit = 20, offset = 0, preferre
 }
 
 module.exports.listWindowedTrendingTracksUser = listWindowedTrendingTracksUser;
+
+async function listUndiscoveredTracksUser({ userId, limit = 20, offset = 0, preferredLanguages } = {}) {
+    const start = Math.max(0, Number(offset) || 0);
+    const l = Math.max(1, Math.min(100, Number(limit) || 20));
+    const languageCodes = normalizeLanguageCodes(preferredLanguages);
+
+    let listenedTrackIds = [];
+    if (userId) {
+        const { data: history } = await client()
+            .from('user_track_listening_history')
+            .select('track_id')
+            .eq('user_id', userId);
+        if (history && history.length > 0) {
+            listenedTrackIds = history.map(h => h.track_id).filter(Boolean);
+        }
+    }
+
+    let qb = client()
+        .from(table)
+        .select(`
+            track_id, title, duration, created_at, album_id, play_count,
+            albums:albums!tracks_album_id_fkey(title, cover_url),
+            track_artists:track_artists!track_artists_track_id_fkey(
+                artists:artists!track_artists_artist_id_fkey(
+                    artist_id,
+                    users:users!artists_artist_id_fkey(name, avatar_url)
+                )
+            )
+        `)
+        .eq('is_published', true);
+
+    if (languageCodes.length === 1) qb = qb.eq('language_code', languageCodes[0]);
+    else if (languageCodes.length > 1) qb = qb.in('language_code', languageCodes);
+
+    // Fetch a larger pool of candidates to filter and shuffle in JS memory
+    qb = qb.order('play_count', { ascending: true }).limit(500);
+    const { data, error } = await qb;
+    if (error) throw error;
+
+    const listenedSet = new Set(listenedTrackIds);
+    const unlistened = (data || []).filter(row => !listenedSet.has(row.track_id));
+
+    const shuffle = (array) => {
+        let currentIndex = array.length, randomIndex;
+        while (currentIndex != 0) {
+            randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            [array[currentIndex], array[randomIndex]] = [
+                array[randomIndex], array[currentIndex]];
+        }
+        return array;
+    };
+
+    let finalPool = unlistened;
+    if (offset === 0) {
+        finalPool = shuffle([...unlistened]);
+    }
+
+    const sliced = finalPool.slice(start, start + l);
+    const items = sliced.map(row => ({
+        type: 'track',
+        track_id: row.track_id,
+        title: row.title,
+        duration: row.duration,
+        created_at: row.created_at,
+        album: {
+            title: row.albums?.title,
+            cover_url: row.albums?.cover_url,
+        },
+        artists: (row.track_artists || []).map(ta => ({
+            artist_id: ta?.artists?.artist_id || null,
+            name: ta?.artists?.users?.name || null,
+            avatar_url: ta?.artists?.users?.avatar_url || null,
+        })),
+    }));
+
+    return { items, total: unlistened.length };
+}
+
+module.exports.listUndiscoveredTracksUser = listUndiscoveredTracksUser;
+
