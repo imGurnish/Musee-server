@@ -1,5 +1,6 @@
 require('dotenv').config();
 require('express-async-errors');
+const logger = require('./utils/logger');
 
 const express = require('express');
 const cors = require('cors');
@@ -19,7 +20,13 @@ app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(
+    morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
+        stream: {
+            write: (message) => logger.info(message.trim()),
+        },
+    })
+);
 
 // Basic rate limit
 app.use(
