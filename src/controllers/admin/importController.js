@@ -366,8 +366,11 @@ async function runAlbumImportOnce(albumExternalId, options = {}) {
   return promise;
 }
 
+// Mirrors what JioSaavn's own web app sends to force Indian catalogue regardless of server IP.
+const SAAVN_INDIA_PARAMS = { cc: 'in', _marker: '0', ctx: 'web6dot0' };
+
 function buildSaavnUrl(callName, params = {}) {
-  const query = new URLSearchParams({ __call: callName, _format: 'json', ...params });
+  const query = new URLSearchParams({ __call: callName, _format: 'json', ...SAAVN_INDIA_PARAMS, ...params });
   return `${SAAVN_BASE}?${query.toString()}`;
 }
 
@@ -378,7 +381,10 @@ async function fetchSaavn(callName, params = {}) {
     timeout: 30000,
     headers: {
       Accept: 'application/json, text/plain, */*',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+      'Accept-Language': 'en-IN,en;q=0.9,hi;q=0.8',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Referer': 'https://www.jiosaavn.com/',
+      'Origin': 'https://www.jiosaavn.com'
     }
   });
 

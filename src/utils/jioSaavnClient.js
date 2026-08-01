@@ -10,11 +10,22 @@ const logger = require('./logger');
 const JIO_SAAVN_BASE_URL = process.env.JIO_SAAVN_API_URL || 'https://www.jiosaavn.com/api.php';
 const JIO_SAAVN_SEARCH_URL = process.env.JIO_SAAVN_SEARCH_URL || 'https://www.jiosaavn.com/api.php';
 
+// These params mirror what JioSaavn's own web app sends to get Indian catalogue.
+// `cc=in` sets country code, `_marker=0` & `ctx=web6dot0` ensure full Indian content.
+const INDIA_PARAMS = {
+  cc: 'in',
+  _marker: '0',
+  ctx: 'web6dot0'
+};
+
 const client = axios.create({
   baseURL: JIO_SAAVN_BASE_URL,
   timeout: 10000,
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-IN,en;q=0.9,hi;q=0.8',
+    'Referer': 'https://www.jiosaavn.com/',
+    'Origin': 'https://www.jiosaavn.com'
   }
 });
 
@@ -32,6 +43,7 @@ async function searchTracks(query, limit = 10) {
       params: {
         __call: 'autocomplete.get',
         _format: 'json',
+        ...INDIA_PARAMS,
         query: query,
         count: limit
       }
@@ -80,7 +92,7 @@ async function getTrack(trackId) {
       params: {
         __call: 'song.getDetails',
         _format: 'json',
-        cc: 'in',
+        ...INDIA_PARAMS,
         includeRelated: false,
         pid: trackId
       }
@@ -132,6 +144,7 @@ async function searchAlbums(query, limit = 10) {
       params: {
         __call: 'autocomplete.get',
         _format: 'json',
+        ...INDIA_PARAMS,
         query: query,
         count: limit
       }
@@ -173,7 +186,7 @@ async function getAlbum(albumId) {
       params: {
         __call: 'album.getDetails',
         _format: 'json',
-        cc: 'in',
+        ...INDIA_PARAMS,
         albumid: albumId
       }
     });
@@ -227,6 +240,7 @@ async function searchArtists(query, limit = 10) {
       params: {
         __call: 'autocomplete.get',
         _format: 'json',
+        ...INDIA_PARAMS,
         query: query,
         count: limit
       }
@@ -266,7 +280,7 @@ async function getArtist(artistId) {
       params: {
         __call: 'artist.getDetails',
         _format: 'json',
-        cc: 'in',
+        ...INDIA_PARAMS,
         artistid: artistId
       }
     });
