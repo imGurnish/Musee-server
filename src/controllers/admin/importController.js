@@ -2215,16 +2215,24 @@ async function handleTranscodeCallback(req, res) {
 
 async function proxyJioSaavn(req, res) {
   try {
-    const params = req.query;
+    // Merge caller params with forced India params (override wins for India keys).
+    const params = {
+      ...req.query,
+      cc: 'in',
+      _marker: '0',
+      ctx: 'web6dot0',
+    };
+
     const url = 'https://www.jiosaavn.com/api.php';
     const response = await axios.get(url, {
       params,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'Accept': 'application/json,text/plain,*/*',
+        'Accept-Language': 'en-IN,en;q=0.9,hi;q=0.8',
         'Origin': 'https://www.jiosaavn.com',
         'Referer': 'https://www.jiosaavn.com/',
-        'Cookie': 'L=english',
+        'Cookie': 'DL=english; ct=IN; L=english',
       }
     });
 

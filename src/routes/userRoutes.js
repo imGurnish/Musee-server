@@ -14,6 +14,7 @@ const followRoutes = require('./user/followRoutes');
 const dashboardRoutes = require('./user/dashboardRoutes');
 const queueRoutes = require('./user/queueRoutes');
 const searchRoutes = require('./user/searchRoutes');
+const jioSaavnProxyRoutes = require('./user/jioSaavnProxyRoutes');
 
 
 router.use(authUser);
@@ -29,5 +30,8 @@ router.use('/follows', followRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/queue', queueRoutes);
 router.use('/search', searchRoutes);
+// JioSaavn proxy — for web clients only.
+// Native clients (Android/Linux/Windows) call JioSaavn on-device.
+router.use('/jiosaavn', jioSaavnProxyRoutes);
 
 module.exports = router;
