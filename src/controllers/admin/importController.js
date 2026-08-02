@@ -597,7 +597,23 @@ function firstArtistFromTrack(rawTrack) {
 }
 
 function normalizeTrackPayload(rawData, trackId) {
-  const rawSong = rawData?.[trackId] || rawData?.songs?.[trackId] || rawData;
+  // song.getDetails returns { songs: [{id, language, ...}] } — an array.
+  // The old rawData?.songs?.[trackId] treated songs as an object keyed by ID,
+  // which always returned undefined and fell back to the wrapper object.
+  let rawSong =
+    rawData?.[trackId] ||           // { "vLSaC03b": { ... } }
+    rawData?.songs?.[trackId] ||    // { songs: { "vLSaC03b": { ... } } }
+    null;
+
+  // songs is an array — find by id (song.getDetails format)
+  if (!rawSong && Array.isArray(rawData?.songs)) {
+    rawSong =
+      rawData.songs.find((s) => s?.id?.toString() === trackId?.toString()) ||
+      rawData.songs[0] ||
+      null;
+  }
+
+  rawSong = rawSong || rawData;
   const artist = firstArtistFromTrack(rawSong || {});
   const artistCandidates = extractTrackArtistCandidates(rawSong || {});
   const trackLanguage = resolveTrackLanguage(rawSong || {});
@@ -1353,6 +1369,15 @@ async function importTrackById(trackId, options = {}) {
   });
 
   const { data: remoteTrack } = await fetchSaavn('song.getDetails', { pids: trackId });
+  importLog('info', 'song.getDetails raw response keys', {
+    trackId,
+    topLevelKeys: remoteTrack && typeof remoteTrack === 'object' ? Object.keys(remoteTrack) : typeof remoteTrack,
+    songsIsArray: Array.isArray(remoteTrack?.songs),
+    songsLength: Array.isArray(remoteTrack?.songs) ? remoteTrack.songs.length : null,
+    firstSongKeys: Array.isArray(remoteTrack?.songs) && remoteTrack.songs[0]
+      ? Object.keys(remoteTrack.songs[0]).slice(0, 10)
+      : null
+  });
   const normalized = normalizeTrackPayload(remoteTrack, trackId);
   importLog('info', 'Resolved track artist from payload', {
     trackId,
