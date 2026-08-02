@@ -137,10 +137,23 @@ function resolveTrackLanguage(rawSong) {
     }
   }
 
+  // JioSaavn returns language="unknown" when the server IP is outside India
+  // and geo-detection fails. Since JioSaavn is exclusively an Indian platform,
+  // defaulting to Hindi is the safest fallback rather than hard-failing the import.
+  const rawLanguage = candidates.find((c) => typeof c === 'string' && c.trim()) || null;
+  const isJioSaavnUnknown = !rawLanguage || rawLanguage.trim().toLowerCase() === 'unknown';
+  if (isJioSaavnUnknown) {
+    importLog('warn',
+      'JioSaavn returned language="unknown" (likely server geo-restriction). ' +
+      'Defaulting to Hindi for this track.'
+    );
+    return { languageCode: 'hi', languageName: 'Hindi', rawLanguage: rawLanguage || 'unknown' };
+  }
+
   return {
     languageCode: null,
     languageName: null,
-    rawLanguage: candidates.find((candidate) => typeof candidate === 'string' && candidate.trim()) || null
+    rawLanguage
   };
 }
 
@@ -384,7 +397,10 @@ async function fetchSaavn(callName, params = {}) {
       'Accept-Language': 'en-IN,en;q=0.9,hi;q=0.8',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       'Referer': 'https://www.jiosaavn.com/',
-      'Origin': 'https://www.jiosaavn.com'
+      'Origin': 'https://www.jiosaavn.com',
+      // Cookie pins the serving region to India regardless of server IP.
+      // DL=english keeps lyrics/UI in English; ct=IN forces Indian catalogue.
+      'Cookie': 'DL=english; ct=IN; L=english'
     }
   });
 
