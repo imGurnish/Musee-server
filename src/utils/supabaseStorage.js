@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { supabaseAdmin } = require('../db/config');
 const mime = require('mime-types');
 
@@ -10,8 +11,14 @@ async function uploadToSupabaseStoragePublic(bucket, path, file) {
     const client = supabaseAdmin;
     if (!client || !client.storage) return null;
     try {
-        // upload buffer directly; upsert true to replace existing avatar
-        const { error: upErr } = await client.storage.from(bucket).upload(path, file.buffer, { contentType: file.mimetype, upsert: true });
+        let fileBody = file.buffer;
+        if (!fileBody && file.path && fs.existsSync(file.path)) {
+            fileBody = fs.readFileSync(file.path);
+        }
+        if (!fileBody) return null;
+
+        // upload to Supabase storage; upsert true to replace existing
+        const { error: upErr } = await client.storage.from(bucket).upload(path, fileBody, { contentType: file.mimetype, upsert: true });
         if (upErr) {
             console.warn('Supabase storage upload error:', upErr.message || upErr);
             return null;
@@ -24,8 +31,14 @@ async function uploadToSupabaseStoragePublic(bucket, path, file) {
         if (publicUrl) return publicUrl;
         throw new Error('Could not retrieve public URL after upload');
     } catch (e) {
-        console.warn('Avatar upload failed:', e?.message || e);
+        console.warn('Upload failed:', e?.message || e);
         return null;
+    } finally {
+        if (file.path) {
+            try {
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            } catch (_) {}
+        }
     }
 }
 

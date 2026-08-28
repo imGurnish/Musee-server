@@ -243,6 +243,7 @@ async function processAudioBuffer(audioFile, trackId) {
         return { bitrate, files: generated, hls: { master: `${hlsPrefix}/master.m3u8` } };
     } finally {
         safeUnlink(infile);
+        if (audioFile?.path) safeUnlink(audioFile.path);
         generatedLocalFiles.forEach(safeUnlink);
         safeRemoveDir(hlsRootDir);
     }

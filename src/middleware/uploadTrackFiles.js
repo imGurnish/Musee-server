@@ -1,7 +1,10 @@
+const os = require('os');
 const multer = require('multer');
 
-// memory storage to upload buffers to Supabase directly
-const storage = multer.memoryStorage();
+// disk storage to stream large track/video files to temporary disk rather than RAM
+const storage = multer.diskStorage({
+    destination: os.tmpdir(),
+});
 const upload = multer({
     storage,
     limits: { fileSize: 152 * 1024 * 1024 }, // 152MB default for tracks/videos

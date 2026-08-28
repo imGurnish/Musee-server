@@ -3,6 +3,9 @@
  * Order: artist -> album -> track -> playlist
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -23,7 +26,7 @@ const DEFAULTS = {
 const SAAVN_BASE = 'https://www.jiosaavn.com/api.php';
 const TRACK_IMPORT_CONCURRENCY = Math.max(
   1,
-  Math.min(100, Number.parseInt(process.env.IMPORT_TRACK_CONCURRENCY || '20', 10) || 20)
+  Math.min(100, Number.parseInt(process.env.IMPORT_TRACK_CONCURRENCY || '2', 10) || 2)
 );
 
 const importJobs = new Map();
@@ -35,18 +38,15 @@ function importLog(level, message, context = null) {
 
   if (level === 'error') {
     logger.error(`${prefix} ${payload}`);
-    console.error(`${prefix} ${payload}`);
     return;
   }
 
   if (level === 'warn') {
     logger.warn(`${prefix} ${payload}`);
-    console.warn(`${prefix} ${payload}`);
     return;
   }
 
   logger.info(`${prefix} ${payload}`);
-  console.log(`${prefix} ${payload}`);
 }
 
 async function createImportAuthUser(displayName) {
@@ -439,13 +439,13 @@ function isRetryableMediaError(error) {
   return Boolean(error?.code);
 }
 
-async function fetchMediaWithRetry(url, { maxAttempts = 5 } = {}) {
+async function fetchMediaToFileWithRetry(url, destFilePath, { maxAttempts = 5 } = {}) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await axios.get(url, {
-        responseType: 'arraybuffer',
+      const response = await axios.get(url, {
+        responseType: 'stream',
         timeout: 60000,
         headers: {
           Accept: 'audio/*,*/*;q=0.8',
@@ -454,8 +454,22 @@ async function fetchMediaWithRetry(url, { maxAttempts = 5 } = {}) {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
+
+      const writer = fs.createWriteStream(destFilePath);
+      response.data.pipe(writer);
+
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+
+      return { success: true };
     } catch (error) {
       lastError = error;
+
+      if (fs.existsSync(destFilePath)) {
+        try { fs.unlinkSync(destFilePath); } catch (_) {}
+      }
 
       if (!isRetryableMediaError(error) || attempt >= maxAttempts) {
         break;
@@ -546,7 +560,7 @@ function buildBitrateVariantUrls(baseUrl) {
   return Array.from(new Set(variants));
 }
 
-async function fetchTrackMediaForIngest({ encryptedMediaUrl }) {
+async function fetchTrackMediaToFileForIngest({ encryptedMediaUrl, destFilePath }) {
   const candidates = [];
 
   const decryptedUrl = decryptSaavnMediaUrl(encryptedMediaUrl);
@@ -574,12 +588,12 @@ async function fetchTrackMediaForIngest({ encryptedMediaUrl }) {
         maxAttempts: candidate.maxAttempts
       });
 
-      const response = await fetchMediaWithRetry(candidate.url, {
+      await fetchMediaToFileWithRetry(candidate.url, destFilePath, {
         maxAttempts: candidate.maxAttempts
       });
 
       importLog('info', 'Media fetch candidate succeeded', { source: candidate.source });
-      return response;
+      return { success: true, source: candidate.source };
     } catch (error) {
       lastError = error;
       importLog('warn', 'Media fetch candidate failed', {
@@ -1277,83 +1291,100 @@ async function ingestTrackAudioAssets({ trackId, encryptedMediaUrl, sourceTrackI
     dbTrackId: trackId
   });
 
-  // Download the track audio locally to server buffer using the working IP/APIs
-  const mediaResp = await fetchTrackMediaForIngest({ encryptedMediaUrl });
-  if (!mediaResp || !mediaResp.data) {
-    throw new Error(`Failed to download audio content on server for track ${sourceTrackId || trackId}`);
-  }
+  const tmpDir = path.join(os.tmpdir(), 'musee_import');
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  const tmpAudioPath = path.join(tmpDir, `track_${trackId}_${Date.now()}.mp4`);
 
-  const audioBase64 = Buffer.from(mediaResp.data).toString('base64');
-  importLog('info', 'Audio downloaded, uploading to Azure Function for transcoding', {
-    trackId: sourceTrackId || trackId,
-    sizeBytes: mediaResp.data.length
-  });
-
-  const functionUrl = process.env.AZURE_TRANSCODER_URL;
-  const functionKey = process.env.AZURE_TRANSCODER_CODE;
-
-  if (!functionUrl) {
-    throw new Error('Azure Transcoder function URL is not configured (AZURE_TRANSCODER_URL)');
-  }
-
-  const urlWithCode = functionKey 
-    ? `${functionUrl}${functionUrl.includes('?') ? '&' : '?'}code=${functionKey}` 
-    : functionUrl;
-
-  if (jobTrackId) {
-    await supabaseAdmin
-      .from('import_job_tracks')
-      .update({ status: 'transcoding', updated_at: new Date().toISOString() })
-      .eq('id', jobTrackId);
-  }
-
-  let response;
   try {
-    response = await axios.post(urlWithCode, {
-      trackId,
-      audioBase64
-    }, {
-      headers: { 'Content-Type': 'application/json' },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 180000 // 3 minutes timeout for Azure Function to transcode and upload
+    // Download the track audio directly to temporary disk file via stream piping
+    await fetchTrackMediaToFileForIngest({ encryptedMediaUrl, destFilePath: tmpAudioPath });
+
+    if (!fs.existsSync(tmpAudioPath)) {
+      throw new Error(`Failed to download audio content to file for track ${sourceTrackId || trackId}`);
+    }
+
+    const fileStats = fs.statSync(tmpAudioPath);
+    const audioBuffer = fs.readFileSync(tmpAudioPath);
+    const audioBase64 = audioBuffer.toString('base64');
+
+    // Remove temp file from disk now that base64 is created
+    try { fs.unlinkSync(tmpAudioPath); } catch (_) {}
+
+    importLog('info', 'Audio downloaded to disk, sending to Azure Function for transcoding', {
+      trackId: sourceTrackId || trackId,
+      sizeBytes: fileStats.size
     });
-  } catch (axiosErr) {
-    const errorDetails = axiosErr.response?.data?.error || axiosErr.response?.data || axiosErr.message;
-    throw new Error(`Azure Function error: ${errorDetails}`);
-  }
 
-  if (!response.data || !response.data.success) {
-    throw new Error(response.data?.error || 'Azure Function transcoding failed');
-  }
+    const functionUrl = process.env.AZURE_TRANSCODER_URL;
+    const functionKey = process.env.AZURE_TRANSCODER_CODE;
 
-  const { hlsMasterPath } = response.data;
+    if (!functionUrl) {
+      throw new Error('Azure Transcoder function URL is not configured (AZURE_TRANSCODER_URL)');
+    }
 
-  importLog('info', 'Azure Function transcoding completed successfully', {
-    trackId: sourceTrackId || trackId,
-    dbTrackId: trackId,
-    hlsMasterPath
-  });
+    const urlWithCode = functionKey 
+      ? `${functionUrl}${functionUrl.includes('?') ? '&' : '?'}code=${functionKey}` 
+      : functionUrl;
 
-  const assetTx = await executeTransaction(async (tracker) => {
-    await updateAndTrack(
-      tracker,
-      'tracks',
-      { hls_master_path: hlsMasterPath, is_published: true },
-      'track_id',
-      trackId
-    );
-  }, { operationName: `Track asset ingest ${trackId}` });
+    if (jobTrackId) {
+      await supabaseAdmin
+        .from('import_job_tracks')
+        .update({ status: 'transcoding', updated_at: new Date().toISOString() })
+        .eq('id', jobTrackId);
+    }
 
-  if (!assetTx.success) {
-    throw new Error(assetTx.error || 'Track asset database write transaction failed');
-  }
+    let response;
+    try {
+      response = await axios.post(urlWithCode, {
+        trackId,
+        audioBase64
+      }, {
+        headers: { 'Content-Type': 'application/json' },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        timeout: 180000 // 3 minutes timeout for Azure Function to transcode and upload
+      });
+    } catch (axiosErr) {
+      const errorDetails = axiosErr.response?.data?.error || axiosErr.response?.data || axiosErr.message;
+      throw new Error(`Azure Function error: ${errorDetails}`);
+    }
 
-  if (jobTrackId) {
-    await supabaseAdmin
-      .from('import_job_tracks')
-      .update({ status: 'completed', updated_at: new Date().toISOString() })
-      .eq('id', jobTrackId);
+    if (!response.data || !response.data.success) {
+      throw new Error(response.data?.error || 'Azure Function transcoding failed');
+    }
+
+    const { hlsMasterPath } = response.data;
+
+    importLog('info', 'Azure Function transcoding completed successfully', {
+      trackId: sourceTrackId || trackId,
+      dbTrackId: trackId,
+      hlsMasterPath
+    });
+
+    const assetTx = await executeTransaction(async (tracker) => {
+      await updateAndTrack(
+        tracker,
+        'tracks',
+        { hls_master_path: hlsMasterPath, is_published: true },
+        'track_id',
+        trackId
+      );
+    }, { operationName: `Track asset ingest ${trackId}` });
+
+    if (!assetTx.success) {
+      throw new Error(assetTx.error || 'Track asset database write transaction failed');
+    }
+
+    if (jobTrackId) {
+      await supabaseAdmin
+        .from('import_job_tracks')
+        .update({ status: 'completed', updated_at: new Date().toISOString() })
+        .eq('id', jobTrackId);
+    }
+  } finally {
+    if (fs.existsSync(tmpAudioPath)) {
+      try { fs.unlinkSync(tmpAudioPath); } catch (_) {}
+    }
   }
 }
 
@@ -1420,7 +1451,7 @@ async function importTrackById(trackId, options = {}) {
     }
   }
 
-  const shouldExpandAlbum = !options.skipFullAlbumExpansion && Boolean(normalized.albumId);
+  const shouldExpandAlbum = Boolean(options.expandAlbum) && !options.skipFullAlbumExpansion && Boolean(normalized.albumId);
   if (shouldExpandAlbum) {
     const completedAlbumImports = getCompletedAlbumImportSet(options);
     const alreadyExpanded = completedAlbumImports?.has(normalized.albumId) || false;
